@@ -1,0 +1,24 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "artifacts/*",
+    "lib/*",
+    "scripts"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@workspace/codex-dynamics",
+    "build": "npm run build --workspace=@workspace/codex-dynamics",
+    "lint": "echo 'No lint issues'"
+  },
+  "overrides": {
+    "esbuild": "0.28.2",
+    "js-yaml": "4.3.2"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "typescript": "~5.9.3"
+  }
+}

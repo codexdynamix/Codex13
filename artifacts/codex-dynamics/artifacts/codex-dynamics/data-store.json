@@ -1,0 +1,355 @@
+{
+  "clients": [
+    {
+      "id": "client_vance",
+      "name": "Eleanor Vance",
+      "company": "Vance Tech Capital",
+      "email": "eleanor.vance@vancetech.io",
+      "password": "client123",
+      "phone": "+1 (415) 890-2341",
+      "address": "450 Mission St, Suite 1800, San Francisco, CA 94105",
+      "country": "United States",
+      "countryCode": "US",
+      "status": "Active",
+      "portalEnabled": true,
+      "tier": "Enterprise Partner",
+      "lastLoginAt": "2026-10-02T19:31:54.817Z",
+      "createdAt": "2026-09-02T20:31:54.817Z"
+    },
+    {
+      "id": "client_brody",
+      "name": "Marcus Brody",
+      "company": "Brody Luxury Goods",
+      "email": "marcus@brodydesign.co",
+      "password": "client123",
+      "phone": "+44 20 7946 0912",
+      "address": "14 Berkeley Square, Mayfair, London W1J 6BL",
+      "country": "United Kingdom",
+      "countryCode": "GB",
+      "status": "Active",
+      "portalEnabled": true,
+      "tier": "Growth Tier",
+      "lastLoginAt": "2026-10-02T18:31:54.817Z",
+      "createdAt": "2026-08-18T20:31:54.817Z"
+    },
+    {
+      "id": "usr_client",
+      "name": "Alex Morgan",
+      "company": "Morgan Digital Media",
+      "email": "client@codexdynamics.com",
+      "password": "client123",
+      "phone": "+1 (555) 234-5678",
+      "address": "777 Broadway, 12th Floor, New York, NY 10003",
+      "country": "United States",
+      "countryCode": "US",
+      "status": "Active",
+      "portalEnabled": true,
+      "tier": "Dedicated Agency",
+      "lastLoginAt": "2026-10-02T20:01:54.817Z",
+      "createdAt": "2026-08-03T20:31:54.817Z"
+    }
+  ],
+  "leads": [
+    {
+      "id": "client_vance",
+      "first_name": "Eleanor",
+      "last_name": "Vance",
+      "name": "Eleanor Vance",
+      "email": "eleanor.vance@vancetech.io",
+      "phone": "+1 (415) 890-2341",
+      "country": "United States",
+      "country_code": "US",
+      "stage": "New",
+      "status": "New",
+      "funnel": "High-Performance Website",
+      "company": "Vance Tech Capital",
+      "service": "High-Performance Website",
+      "budget": "$15,000 - $25,000",
+      "timeline": "Within 1 Month",
+      "message": "We need a complete rebuild of our venture fund corporate portal with real-time portfolio performance dashboards and interactive investor LP access.",
+      "source": "website_contact_modal",
+      "notes": "High priority lead.",
+      "client_password": "client123",
+      "clientPassword": "client123",
+      "assigned_office_id": "of_london",
+      "assigned_team_id": "tm_alpha",
+      "assigned_agent_id": "adm_ag",
+      "is_online": true,
+      "comment_history": [
+        {
+          "id": "c1",
+          "by_name": "Website Intake",
+          "text": "Intake submitted via corporate booking modal.",
+          "created_at": "2026-10-02T20:31:54.817Z"
+        }
+      ],
+      "status_history": [
+        {
+          "id": "s1",
+          "from_stage": "New",
+          "to_stage": "New",
+          "by_name": "System",
+          "created_at": "2026-10-02T20:31:54.817Z"
+        }
+      ],
+      "appointments": [],
+      "activity_record": {
+        "pageViews": 28,
+        "sessions": 7,
+        "lastLogin": "2026-10-02T19:31:54.817Z"
+      },
+      "created_at": "2026-10-02T20:31:54.817Z",
+      "updated_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": "client_brody",
+      "first_name": "Marcus",
+      "last_name": "Brody",
+      "name": "Marcus Brody",
+      "email": "marcus@brodydesign.co",
+      "phone": "+44 20 7946 0912",
+      "country": "United Kingdom",
+      "country_code": "GB",
+      "stage": "In Line",
+      "status": "In Line",
+      "funnel": "Web Design & UI/UX",
+      "company": "Brody Luxury Goods",
+      "service": "Web Design & UI/UX",
+      "budget": "$10,000 - $18,000",
+      "timeline": "Immediate",
+      "message": "Looking for a bespoke e-commerce experience with 3D product previews and ultra-fast mobile checkout.",
+      "source": "website_contact_form",
+      "notes": "Waiting for brand pack.",
+      "client_password": "client123",
+      "clientPassword": "client123",
+      "assigned_office_id": "of_london",
+      "assigned_team_id": "tm_alpha",
+      "assigned_agent_id": "adm_ag",
+      "is_online": false,
+      "comment_history": [],
+      "status_history": [],
+      "appointments": [],
+      "activity_record": {
+        "pageViews": 14,
+        "sessions": 4,
+        "lastLogin": "2026-10-02T18:31:54.817Z"
+      },
+      "created_at": "2026-10-02T20:31:54.817Z",
+      "updated_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": "ld_1001",
+      "first_name": "James",
+      "last_name": "Morrison",
+      "name": "James Morrison",
+      "email": "james.morrison@enterprise.co.uk",
+      "phone": "+44 20 7946 0912",
+      "country": "United Kingdom",
+      "country_code": "GB",
+      "stage": "In Line",
+      "status": "In Line",
+      "funnel": "Web Development",
+      "company": "Enterprise UK",
+      "service": "Web Development",
+      "budget": "$20,000+",
+      "timeline": "1-2 Months",
+      "message": "Requirements discovery for global corporate web platform.",
+      "source": "direct",
+      "client_password": "client123",
+      "clientPassword": "client123",
+      "assigned_office_id": "of_london",
+      "assigned_team_id": "tm_alpha",
+      "assigned_agent_id": "adm_ag",
+      "comment_history": [],
+      "status_history": [],
+      "appointments": [],
+      "activity_record": {
+        "pageViews": 19,
+        "sessions": 5,
+        "lastLogin": "2026-10-02T16:31:54.817Z"
+      },
+      "created_at": "2026-10-02T20:31:54.817Z",
+      "updated_at": "2026-10-02T20:31:54.817Z"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif_init_1",
+      "user_id": "client_vance",
+      "title": "Project Milestone Reached",
+      "description": "Frontend architectural review completed successfully for Vance Capital.",
+      "kind": "project",
+      "type": "project",
+      "is_read": false,
+      "link": "/portal/projects",
+      "sent_by": "Sarah Admin",
+      "created_at": "2026-10-02T18:31:54.817Z"
+    },
+    {
+      "id": "notif_init_2",
+      "user_id": null,
+      "title": "Platform Security Update",
+      "description": "Scheduled infrastructure maintenance completed with zero downtime.",
+      "kind": "system",
+      "type": "domain",
+      "is_read": true,
+      "link": "/portal/notifications",
+      "sent_by": "System",
+      "created_at": "2026-10-01T20:31:54.817Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_init_1",
+      "user_id": "client_vance",
+      "sender": "client",
+      "sender_name": "Eleanor Vance",
+      "body": "Hello team, could you please provide an update on the dashboard integration timeline?",
+      "created_at": "2026-10-02T16:31:54.817Z",
+      "is_read": true
+    },
+    {
+      "id": "msg_init_2",
+      "user_id": "client_vance",
+      "sender": "agent",
+      "sender_name": "Alex Agent",
+      "body": "Hi Eleanor! The dashboard APIs are wired and our team is running final end-to-end load tests today.",
+      "created_at": "2026-10-02T18:31:54.817Z",
+      "is_read": true
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "aud_1",
+      "user_id": "client_vance",
+      "client_name": "Eleanor Vance",
+      "action": "CLIENT_LOGIN",
+      "details": "Logged into Client Portal dashboard from Chrome on macOS",
+      "ip_address": "192.168.1.104",
+      "created_at": "2026-10-02T19:31:54.817Z"
+    },
+    {
+      "id": "aud_2",
+      "user_id": "client_vance",
+      "client_name": "Eleanor Vance",
+      "action": "PAGE_VIEW",
+      "details": "Viewed Portfolio Projects and Milestone Deliverables",
+      "ip_address": "192.168.1.104",
+      "created_at": "2026-10-02T19:33:34.817Z"
+    },
+    {
+      "id": "aud_3",
+      "user_id": "client_vance",
+      "client_name": "Eleanor Vance",
+      "action": "TICKET_REPLIED",
+      "details": "Sent support message: \"Hello team, could you please provide an update...\"",
+      "ip_address": "192.168.1.104",
+      "created_at": "2026-10-02T16:31:54.817Z"
+    },
+    {
+      "id": "aud_4",
+      "user_id": "client_brody",
+      "client_name": "Marcus Brody",
+      "action": "CLIENT_LOGIN",
+      "details": "Client session established from Safari on iOS",
+      "ip_address": "82.45.12.89",
+      "created_at": "2026-10-02T18:31:54.817Z"
+    }
+  ],
+  "projects": [
+    {
+      "id": 1,
+      "title": "Vance Tech Capital Portal",
+      "site_name": "Vance Capital",
+      "site_url": "https://vancetech.io",
+      "description": "Next-generation venture capital portfolio management and investor dashboard.",
+      "category": "Websites & Web Apps",
+      "image_url": "/hero/web-apps.jpg",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": 2,
+      "title": "Brody Luxury Storefront",
+      "site_name": "Brody Goods",
+      "site_url": "https://brodydesign.co",
+      "description": "Bespoke high-conversion storefront with 3D product previews and instant checkout.",
+      "category": "Websites & Web Apps",
+      "image_url": "/hero/design.jpg",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": 3,
+      "title": "Apex Telephony & CRM Gateway",
+      "site_name": "Apex VoIP",
+      "site_url": "https://apextelecom.net",
+      "description": "Omnichannel calling system, VoIP routing, and automated sales pipeline engine.",
+      "category": "CRMs & Calling Systems",
+      "image_url": "/services/crm-calling.jpg",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": 4,
+      "title": "Kroma Digital Studio",
+      "site_name": "Kroma Brand",
+      "site_url": "https://kromastudio.art",
+      "description": "Identity guidelines, custom 3D design system, and multi-channel brand assets.",
+      "category": "Graphic Design & Branding",
+      "image_url": "/services/graphic-design.jpg",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    }
+  ],
+  "blogs": [
+    {
+      "id": 1,
+      "title": "Engineering High-Throughput Web Applications on Edge Networks",
+      "slug": "engineering-high-throughput-web-apps-edge",
+      "content": "<p>Modern enterprise platforms require sub-100ms global latency and zero-downtime rollouts. In this guide, we dive into how Codex Dynamics engineers edge architectures...</p>",
+      "excerpt": "How modern edge networks, reactive client state, and distributed caching unlock instantaneous web experiences.",
+      "category": "Engineering",
+      "author": "Codex Architecture Team",
+      "status": "published",
+      "featured_image": "/hero/web-dev.jpg",
+      "meta_description": "Architecture blueprints for enterprise high-throughput web applications.",
+      "reading_time": 4,
+      "created_at": "2026-10-02T20:31:54.817Z",
+      "updated_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": 2,
+      "title": "The Blueprint for High-Converting Digital Storefronts",
+      "slug": "blueprint-high-converting-storefronts",
+      "content": "<p>Conversion rate optimization starts with layout clarity, tactile typography, and frictionless checkout flows...</p>",
+      "excerpt": "Strategic design patterns and technical optimizations that drive 3x conversion improvements for commerce brands.",
+      "category": "Design & UX",
+      "author": "Codex Creative Studio",
+      "status": "published",
+      "featured_image": "/hero/design.jpg",
+      "meta_description": "Design patterns and optimizations for high-converting ecommerce storefronts.",
+      "reading_time": 5,
+      "created_at": "2026-10-02T20:31:54.817Z",
+      "updated_at": "2026-10-02T20:31:54.817Z"
+    }
+  ],
+  "reviews": [
+    {
+      "id": 1,
+      "author": "Eleanor Vance (Vance Tech Capital)",
+      "rating": 5,
+      "comment": "Codex Dynamics completely transformed our corporate presence. The client portal and real-time reporting have been a game changer for our LP relationships.",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    },
+    {
+      "id": 2,
+      "author": "Marcus Brody (Brody Luxury Goods)",
+      "rating": 5,
+      "comment": "Incredible execution speed and attention to detail. Our mobile conversion went up 42% in the first two weeks post-launch.",
+      "is_published": true,
+      "created_at": "2026-10-02T20:31:54.817Z"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Codex Dynamics",
+  "description": "High-performance websites, web design, web development, custom CRMs, and digital marketing agency.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

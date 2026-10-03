@@ -1,0 +1,30 @@
+export const CONTACT = {
+  name: "Codex Dynamics",
+  phoneE164: "+380636406783",
+  phoneDigits: "380636406783",
+  phoneDisplay: "+380 63 640 6783",
+  email: "codexdynamix@gmail.com",
+  addressStreet: "Sportyvna, 1A",
+  addressCity: "Kyiv, 012023, Ukraine",
+  addressFull: "Sportyvna, 1A, Kyiv, 012023, Ukraine",
+  lat: 50.438743,
+  lng: 30.523177,
+} as const;
+
+export const LINKS = {
+  tel: `tel:${CONTACT.phoneE164}`,
+  whatsapp: `https://wa.me/${CONTACT.phoneDigits}`,
+  telegram: `https://t.me/+${CONTACT.phoneDigits}`,
+  viber: `viber://chat?number=%2B${CONTACT.phoneDigits}`,
+  mailto: `mailto:${CONTACT.email}`,
+  gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${CONTACT.email}`,
+  instagram: "https://www.instagram.com/codex_dynamics/",
+  facebook: "https://www.facebook.com/profile.php?id=61571219783449",
+  linkedin: "https://linkedin.com/company/codexdynamics",
+  twitter: "https://x.com/codexdynamics",
+  github: "https://github.com/codexdynamics",
+  maps: `https://www.google.com/maps/search/?api=1&query=${CONTACT.lat},${CONTACT.lng}`,
+  mapsApple: `https://maps.apple.com/?ll=${CONTACT.lat},${CONTACT.lng}&q=${encodeURIComponent(CONTACT.name)}`,
+  mapsDirections: `https://www.google.com/maps/dir/?api=1&destination=${CONTACT.lat},${CONTACT.lng}`,
+  mapsEmbed: `https://maps.google.com/maps?q=${CONTACT.lat},${CONTACT.lng}&hl=en&z=16&output=embed`,
+} as const;

@@ -1,0 +1,304 @@
+.sess-page { padding: 0 0 32px; position: relative; }
+
+/* ── Toast ── */
+.sess-toast {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 9999;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--crm-card);
+  border: 1px solid var(--crm-border);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  animation: sess-toast-in 0.2s ease;
+}
+.sess-toast-success { background: #1a3326; border-color: #2ecc7140; color: #2ecc71; }
+.sess-toast-error   { background: #2d1a1a; border-color: #e74c3c40; color: #e74c3c; }
+.sess-toast-online  { background: #1a2c1a; border-color: #2ecc7140; color: #2ecc71; }
+@keyframes sess-toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Stats row ── */
+.sess-stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.sess-stat-card {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 10px;
+  padding: 14px 20px; min-width: 130px; flex: 1;
+}
+.sess-stat-num { font-size: 26px; font-weight: 700; color: var(--crm-accent); line-height: 1; margin-bottom: 4px; }
+.sess-stat-lbl { font-size: 11px; color: var(--crm-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+.sess-stat-card.green .sess-stat-num { color: #2ecc71; }
+.sess-stat-card.blue  .sess-stat-num { color: #3498db; }
+
+/* ── Tabs ── */
+.sess-tabs {
+  display: flex; gap: 4px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--crm-card); padding-bottom: 0;
+}
+.crm-admin-app .sess-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 8px 16px; min-width: 0; margin: 0 0 -1px 0; border-radius: 0;
+  font-size: 13px; font-weight: 400; color: var(--crm-text-secondary); cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.crm-admin-app .sess-tab:hover { color: #C8CDDA; background: none; }
+.crm-admin-app .sess-tab.active { background: none; color: var(--crm-accent); border-bottom-color: var(--crm-accent); font-weight: 600; }
+
+/* ── Filters ── */
+.sess-sub-filters { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.crm-admin-app .sess-filter-btn {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 6px;
+  padding: 5px 12px; min-width: 0; margin: 0; font-size: 12px;
+  font-weight: 400; color: var(--crm-text-secondary); cursor: pointer; transition: all 0.15s;
+}
+.crm-admin-app .sess-filter-btn:hover { border-color: color-mix(in srgb, var(--crm-accent) 25%, transparent); color: #C8CDDA; background: var(--crm-card); }
+.crm-admin-app .sess-filter-btn.active { background: color-mix(in srgb, var(--crm-accent) 12%, transparent); border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); }
+
+/* ── Bulk action bar ── */
+.sess-bulk-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  background: color-mix(in srgb, var(--crm-accent) 6%, transparent); border: 1px solid color-mix(in srgb, var(--crm-accent) 19%, transparent);
+  border-radius: 8px; padding: 8px 14px;
+}
+.sess-bulk-count { font-size: 12px; color: var(--crm-accent); font-weight: 600; flex-shrink: 0; }
+.crm-admin-app .sess-bulk-btn {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 6px;
+  padding: 5px 12px; min-width: 0; margin: 0; font-size: 12px; font-weight: 500;
+  color: #C8CDDA; cursor: pointer; transition: all 0.15s;
+}
+.crm-admin-app .sess-bulk-btn.track { border-color: color-mix(in srgb, var(--crm-accent) 31%, transparent); color: var(--crm-accent); }
+.crm-admin-app .sess-bulk-btn.track:hover { background: color-mix(in srgb, var(--crm-accent) 12%, transparent); }
+.crm-admin-app .sess-bulk-btn.delete { border-color: #e74c3c50; color: #e74c3c; }
+.crm-admin-app .sess-bulk-btn.delete:hover { background: rgba(231,76,60,0.1); }
+.crm-admin-app .sess-bulk-btn.cancel { color: var(--crm-text-secondary); }
+.crm-admin-app .sess-bulk-btn.cancel:hover { color: #C8CDDA; }
+.crm-admin-app .sess-bulk-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── Search ── */
+.sess-search { position: relative; margin-bottom: 14px; }
+.crm-admin-app .sess-search-input {
+  width: 100%; background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px; color: #C8CDDA; outline: none; box-sizing: border-box;
+}
+.crm-admin-app .sess-search-input:focus { border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); }
+
+/* ── Table ── */
+.sess-table-wrap { overflow-x: auto; }
+.sess-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sess-table th {
+  text-align: left; color: var(--crm-text-secondary); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 10px;
+  border-bottom: 1px solid var(--crm-card); white-space: nowrap;
+}
+.sess-table td { padding: 10px 10px; border-bottom: 1px solid #1A1E26; color: #C8CDDA; vertical-align: middle; }
+.sess-table tr:hover td { background: rgba(255,255,255,0.02); }
+.sess-row.selected td { background: color-mix(in srgb, var(--crm-accent) 5%, transparent) !important; }
+
+/* ── Online dot ── */
+.sess-online-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--crm-text-secondary); margin-right: 6px; flex-shrink: 0;
+}
+.sess-online-dot.online { background: #2ecc71; box-shadow: 0 0 6px #2ecc7180; animation: sess-blink 2s infinite; }
+@keyframes sess-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* ── Name cell ── */
+.sess-name-cell { display: flex; align-items: center; gap: 6px; }
+.sess-avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--crm-card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--crm-accent); flex-shrink: 0; text-transform: uppercase;
+}
+.sess-name  { font-weight: 500; color: #E8EAF0; }
+.sess-email { font-size: 11px; color: #6C7384; }
+
+/* ── Role badges ── */
+.sess-role-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.sess-role-sa { background: color-mix(in srgb, var(--crm-accent) 15%, transparent);  color: var(--crm-accent);  border: 1px solid color-mix(in srgb, var(--crm-accent) 25%, transparent); }
+.sess-role-om { background: rgba(69,210,160,0.15);  color: #45d2a0;  border: 1px solid #45d2a040; }
+.sess-role-tl { background: rgba(52,152,219,0.15);  color: #3498db;  border: 1px solid #3498db40; }
+.sess-role-ag { background: rgba(155,89,182,0.15);  color: #9b59b6;  border: 1px solid #9b59b640; }
+.sess-role-cl { background: rgba(52,152,219,0.1);   color: #5BA3C9;  border: 1px solid #3498db30; }
+
+/* ── Flag / geo ── */
+.sess-flag { width: 20px; height: 15px; border-radius: 2px; vertical-align: middle; cursor: default; }
+.sess-flag-wrap { display: inline-flex; align-items: center; gap: 5px; }
+.sess-city { font-size: 11px; color: var(--crm-text-secondary); }
+
+/* ── Other cell types ── */
+.sess-time     { white-space: nowrap; color: #A0A8B5; font-size: 11px; }
+.sess-duration { font-size: 12px; color: #C8CDDA; white-space: nowrap; }
+.sess-type-pill { font-size: 14px; }
+
+/* ── Action cell ── */
+.sess-action-cell { display: flex; align-items: center; gap: 4px; }
+.crm-admin-app .sess-track-btn {
+  background: none; border: 1px solid var(--crm-card); border-radius: 6px;
+  padding: 4px 8px; min-width: 0; margin: 0; font-size: 11px; font-weight: 400;
+  color: var(--crm-text-secondary); cursor: pointer; display: inline-flex; align-items: center;
+  gap: 4px; transition: all 0.15s; white-space: nowrap;
+}
+.crm-admin-app .sess-track-btn:hover     { border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); background: none; }
+.crm-admin-app .sess-track-btn.tracking  { background: color-mix(in srgb, var(--crm-accent) 10%, transparent); border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); }
+.crm-admin-app .sess-track-btn.danger    { border-color: transparent; color: var(--crm-text-secondary); }
+.crm-admin-app .sess-track-btn.danger:hover { border-color: color-mix(in srgb, var(--crm-accent) 25%, transparent); color: var(--crm-accent); background: none; }
+.crm-admin-app .sess-track-btn.delete-btn { color: var(--crm-text-secondary); }
+.crm-admin-app .sess-track-btn.delete-btn:hover { border-color: #e74c3c60; color: #e74c3c; background: rgba(231,76,60,0.08); }
+
+/* ── Empty ── */
+.sess-empty { text-align: center; padding: 40px 20px; color: #4B5563; font-size: 13px; }
+
+/* ── Pagination ── */
+.sess-pagination { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 14px; font-size: 12px; color: var(--crm-text-secondary); }
+.crm-admin-app .sess-page-btn {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 6px;
+  padding: 4px 10px; min-width: 0; margin: 0; font-size: 12px; font-weight: 400;
+  color: var(--crm-text-secondary); cursor: pointer; transition: all 0.15s;
+}
+.crm-admin-app .sess-page-btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); background: var(--crm-card); }
+.crm-admin-app .sess-page-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* ── Visitors table ── */
+.sess-ua   { font-size: 11px; color: #6C7384; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-path { font-family: monospace; font-size: 11px; color: #A0A8B5; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-ref  { font-size: 11px; color: #6C7384; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Track confirmation modal ── */
+.sess-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 9000;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.sess-modal {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 14px;
+  padding: 24px; width: 100%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.sess-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+.sess-modal-title  { font-size: 16px; font-weight: 700; color: #E8EAF0; }
+.crm-admin-app .sess-modal-close {
+  background: none; border: none; color: var(--crm-text-secondary); font-size: 18px;
+  cursor: pointer; padding: 2px 6px; line-height: 1; min-width: 0; margin: 0; border-radius: 0; font-weight: 400;
+}
+.crm-admin-app .sess-modal-close:hover { color: #C8CDDA; background: none; }
+.sess-modal-body   { font-size: 13px; color: #A0A8B5; line-height: 1.6; margin-bottom: 18px; }
+.sess-modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+.crm-admin-app .sess-modal-btn {
+  padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s; border: none; min-width: 0; margin: 0;
+}
+.crm-admin-app .sess-modal-btn-primary   { background: var(--crm-accent); color: var(--crm-card); }
+.crm-admin-app .sess-modal-btn-primary:hover { background: #e0a900; }
+.crm-admin-app .sess-modal-btn-secondary { background: var(--crm-card); color: #C8CDDA; border: 1px solid var(--crm-border); }
+.crm-admin-app .sess-modal-btn-secondary:hover { background: #333B45; }
+
+/* 
+   SESSION DETAIL MODAL
+ */
+.sess-detail-modal {
+  background: #181C23;
+  border: 1px solid var(--crm-card);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 780px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+/* Header */
+.sess-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--crm-card);
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.sess-detail-identity { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sess-detail-avatar {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--crm-card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; color: var(--crm-accent); flex-shrink: 0; text-transform: uppercase;
+}
+.sess-detail-name  { font-size: 15px; font-weight: 700; color: #E8EAF0; }
+.sess-detail-email { font-size: 12px; color: #6C7384; }
+
+.sess-online-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--crm-text-secondary); padding: 3px 8px;
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 20px;
+}
+.sess-online-pill.online { color: #2ecc71; border-color: #2ecc7130; background: rgba(46,204,113,0.08); }
+
+.crm-admin-app .sess-detail-action-btn {
+  background: var(--crm-card); border: 1px solid var(--crm-card); border-radius: 8px;
+  padding: 6px 14px; min-width: 0; margin: 0; font-size: 12px; font-weight: 500;
+  color: #C8CDDA; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.crm-admin-app .sess-detail-action-btn:hover { border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); background: color-mix(in srgb, var(--crm-accent) 6%, transparent); }
+.crm-admin-app .sess-detail-action-btn.tracking { background: color-mix(in srgb, var(--crm-accent) 10%, transparent); border-color: color-mix(in srgb, var(--crm-accent) 38%, transparent); color: var(--crm-accent); }
+.crm-admin-app .sess-detail-action-btn.danger   { border-color: #e74c3c50; color: #e74c3c; }
+.crm-admin-app .sess-detail-action-btn.danger:hover { background: rgba(231,76,60,0.1); border-color: #e74c3c80; }
+.crm-admin-app .sess-detail-action-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Sub-tabs */
+.sess-detail-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--crm-card);
+  padding: 0 24px; flex-shrink: 0;
+}
+.crm-admin-app .sess-detail-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 10px 16px; min-width: 0; margin: 0 0 -1px 0; border-radius: 0;
+  font-size: 12px; font-weight: 400; color: var(--crm-text-secondary); cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.crm-admin-app .sess-detail-tab:hover  { color: #C8CDDA; background: none; }
+.crm-admin-app .sess-detail-tab.active { color: var(--crm-accent); border-bottom-color: var(--crm-accent); font-weight: 600; background: none; }
+
+/* Body scroll area */
+.sess-detail-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
+
+/* ── Overview tab ── */
+.sess-detail-stats-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.sess-detail-stat {
+  flex: 1; min-width: 110px; background: var(--crm-card); border: 1px solid var(--crm-card);
+  border-radius: 10px; padding: 12px 14px;
+}
+.sess-detail-stat-num { font-size: 20px; font-weight: 700; color: var(--crm-accent); line-height: 1; margin-bottom: 4px; }
+.sess-detail-stat-lbl { font-size: 10px; color: var(--crm-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+
+.sess-detail-info-grid { display: flex; flex-direction: column; gap: 1px; }
+.sess-info-row {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid #1A1E26;
+}
+.sess-info-row:last-child { border-bottom: none; }
+.sess-info-lbl { font-size: 11px; color: #6C7384; min-width: 110px; flex-shrink: 0; }
+.sess-info-val { font-size: 12px; color: #C8CDDA; }
+
+/* ── Pages tab ── */
+.sess-detail-section-title { font-size: 11px; font-weight: 600; color: var(--crm-text-secondary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 12px; }
+
+.sess-bar-chart { display: flex; flex-direction: column; gap: 6px; }
+.sess-bar-row   { display: flex; align-items: center; gap: 8px; }
+.sess-bar-label { font-size: 11px; color: #A0A8B5; width: 160px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: monospace; }
+.sess-bar-track { flex: 1; height: 8px; background: var(--crm-card); border-radius: 4px; overflow: hidden; }
+.sess-bar-fill  { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+.sess-bar-val   { font-size: 11px; color: var(--crm-text-secondary); width: 36px; text-align: right; flex-shrink: 0; }
+
+.sess-chart-empty { font-size: 12px; color: #4B5563; text-align: center; padding: 20px 0; }
+
+.sess-pv-list { display: flex; flex-direction: column; gap: 1px; }
+.sess-pv-row  { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #1A1E26; }
+.sess-pv-row:last-child { border-bottom: none; }
+.sess-pv-page { font-family: monospace; font-size: 11px; color: #A0A8B5; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-pv-time { font-size: 11px; color: #6C7384; white-space: nowrap; }
+.sess-pv-dur  { font-size: 11px; color: var(--crm-text-secondary); white-space: nowrap; width: 60px; text-align: right; }

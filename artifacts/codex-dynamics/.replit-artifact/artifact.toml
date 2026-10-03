@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Codex Dynamics"
+description = "Codex Dynamics agency website with service showcases, blog, contact flows, and existing CRM administration and client portals."
+version = "1.0.0"
+id = "artifacts/codex-dynamics"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23839
+
+[services.development]
+run = "pnpm --filter @workspace/codex-dynamics run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/codex-dynamics", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/codex-dynamics/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23839"
+BASE_PATH = "/"

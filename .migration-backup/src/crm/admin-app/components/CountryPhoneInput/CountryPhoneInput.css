@@ -1,0 +1,291 @@
+/* ── CountryPhoneInput - consistent with admin inputStyle ── */
+
+.cdx-cp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 10px;
+  background: var(--crm-card);
+  border: 1px solid var(--crm-border);
+  border-radius: 8px;
+  color: var(--crm-text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+  min-height: 40px;
+  transition: border-color 0.15s;
+  outline: none;
+}
+.cdx-cp-trigger:hover {
+  border-color: #555A64;
+}
+.cdx-cp-trigger.cdx-cp-open {
+  border-color: var(--crm-accent);
+}
+.cdx-cp-trigger:focus {
+  border-color: var(--crm-accent);
+}
+
+.cdx-cp-trigger-placeholder {
+  color: #707A8A;
+  flex: 1;
+  font-size: 14px;
+}
+
+.cdx-cp-trigger-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--crm-text-primary);
+}
+
+.cdx-cp-trigger-dial {
+  font-size: 12px;
+  color: var(--crm-text-secondary);
+  flex-shrink: 0;
+}
+
+/* Small, unobtrusive clear button */
+.cdx-cp-trigger-clear {
+  color: var(--crm-text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--crm-border);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+}
+.cdx-cp-trigger-clear:hover {
+  background: #555A64;
+  color: var(--crm-text-primary);
+}
+
+.cdx-cp-chevron {
+  flex-shrink: 0;
+  color: var(--crm-text-secondary);
+  transition: transform 0.18s;
+  margin-left: auto;
+}
+.cdx-cp-chevron.cdx-cp-open {
+  transform: rotate(180deg);
+  color: var(--crm-text-primary);
+}
+
+.cdx-cp-flag {
+  width: 18px;
+  height: 13px;
+  object-fit: cover;
+  border-radius: 2px;
+  flex-shrink: 0;
+  display: block;
+}
+.cdx-cp-flag-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 13px;
+  background: var(--crm-border);
+  border-radius: 2px;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--crm-text-secondary);
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
+}
+
+/* ── Dropdown ── */
+.cdx-cp-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--crm-bg);
+  border: 1px solid var(--crm-border);
+  border-radius: 8px;
+  z-index: 99999;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+}
+.cdx-cp-dropdown-phone {
+  right: auto;
+  width: 260px;
+}
+
+.cdx-cp-search-wrap {
+  position: relative;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--crm-card);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 7px;
+}
+.cdx-cp-search-icon {
+  color: var(--crm-text-secondary);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.cdx-cp-search {
+  flex: 1;
+  padding: 9px 0;
+  background: transparent;
+  border: none;
+  color: var(--crm-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+.cdx-cp-search::placeholder {
+  color: #707A8A;
+}
+
+.cdx-cp-list {
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--crm-border) transparent;
+}
+
+.cdx-cp-empty {
+  padding: 14px 12px;
+  color: var(--crm-text-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.cdx-cp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--crm-text-primary);
+  transition: background 0.1s;
+}
+.cdx-cp-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.cdx-cp-row.cdx-cp-selected {
+  background: color-mix(in srgb, var(--crm-accent) 10%, transparent);
+  color: var(--crm-accent);
+}
+.cdx-cp-row-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cdx-cp-row-dial {
+  font-size: 12px;
+  color: var(--crm-text-secondary);
+  flex-shrink: 0;
+}
+.cdx-cp-row.cdx-cp-selected .cdx-cp-row-dial {
+  color: color-mix(in srgb, var(--crm-accent) 65%, transparent);
+}
+
+/* ── Phone input: single-line, compact ── */
+.cdx-phone-wrap {
+  display: flex;
+  width: 100%;
+  position: relative;
+  border-radius: 8px;
+  border: 1px solid var(--crm-border);
+  background: var(--crm-card);
+  min-height: 40px;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.cdx-phone-wrap:focus-within {
+  border-color: var(--crm-accent);
+}
+
+/* Left: flag + dial code - compact, not oversized */
+.cdx-phone-dial-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 10px;
+  border-right: 1px solid var(--crm-border);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  color: var(--crm-text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background 0.15s;
+  font-size: 13px;
+  font-family: inherit;
+  background: transparent;
+}
+.cdx-phone-dial-btn:hover,
+.cdx-phone-dial-btn.cdx-cp-open {
+  background: #2E323A;
+}
+
+.cdx-phone-dial-code {
+  font-size: 13px;
+  color: var(--crm-text-primary);
+}
+.cdx-phone-dial-code.cdx-empty {
+  color: #707A8A;
+}
+
+/* Right: number input - override global admin input styles */
+.cdx-phone-wrap input.cdx-phone-number {
+  flex: 1;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  border-radius: 0 8px 8px 0;
+  color: var(--crm-text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: unset;
+  width: auto;
+  margin: 0;
+}
+.cdx-phone-wrap input.cdx-phone-number::placeholder {
+  color: #707A8A;
+}
+
+/* Search input inside dropdown - override global admin input styles */
+.cdx-cp-search-wrap input.cdx-cp-search {
+  flex: 1;
+  padding: 9px 0;
+  background: transparent;
+  border: none;
+  color: var(--crm-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  min-height: unset;
+  width: auto;
+  margin: 0;
+}
+.cdx-cp-search-wrap input.cdx-cp-search::placeholder {
+  color: #707A8A;
+}

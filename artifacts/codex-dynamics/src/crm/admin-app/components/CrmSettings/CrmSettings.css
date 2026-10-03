@@ -1,0 +1,694 @@
+/* Settings layout and shared controls use the CRM admin design system.
+   This file contains only the settings-specific theme previews and controls. */
+
+.crm-settings-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Theme Presets Grid */
+.crm-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.crm-theme-card {
+  position: relative;
+  background: var(--crm-bg, #0F1013);
+  border: 1.5px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  text-align: left;
+  overflow: hidden;
+}
+
+.crm-theme-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--crm-border-hover, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.crm-theme-card.is-active {
+  border-color: var(--crm-accent, #0A84FF);
+  box-shadow: 0 0 0 1px var(--crm-accent, #0A84FF), 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.crm-theme-card-preview {
+  height: 64px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.crm-theme-card-mini-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.crm-theme-card-mini-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.crm-theme-card-mini-pill {
+  height: 6px;
+  border-radius: 3px;
+  width: 32px;
+}
+
+.crm-theme-card-mini-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-theme-card-mini-row {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.crm-theme-card-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.crm-theme-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--crm-text-primary, #F5F5F7);
+}
+
+.crm-theme-card-category {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--crm-text-secondary, #86868B);
+}
+
+.crm-theme-card-desc {
+  font-size: 12px;
+  color: var(--crm-text-secondary, #86868B);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.crm-theme-card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--crm-accent, #0A84FF);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Accent Color Swatches */
+.crm-accent-grid {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.crm-accent-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--crm-bg, #0F1013);
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  border-radius: 9999px;
+  padding: 6px 14px 6px 8px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  color: var(--crm-text-primary, #F5F5F7);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.crm-accent-btn:hover {
+  border-color: var(--crm-border-hover, rgba(255, 255, 255, 0.2));
+  transform: translateY(-1px);
+}
+
+.crm-accent-btn.is-active {
+  border-color: currentColor;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+.crm-accent-color-circle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.crm-custom-color-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--crm-border, rgba(255, 255, 255, 0.06));
+}
+
+.crm-custom-color-picker {
+  -webkit-appearance: none;
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+}
+
+.crm-custom-color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.crm-custom-color-picker::-webkit-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+}
+
+.crm-color-hex-input {
+  background: var(--crm-bg, #0F1013);
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  color: var(--crm-text-primary, #F5F5F7);
+  font-family: monospace;
+  font-size: 13px;
+  padding: 7px 12px;
+  width: 110px;
+  outline: none;
+}
+
+.crm-color-hex-input:focus {
+  border-color: var(--crm-accent, #0A84FF);
+}
+
+/* Option Cards (Density & Radius) */
+.crm-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.crm-option-card {
+  background: var(--crm-bg, #0F1013);
+  border: 1.5px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  text-align: left;
+}
+
+.crm-option-card:hover {
+  border-color: var(--crm-border-hover, rgba(255, 255, 255, 0.18));
+}
+
+.crm-option-card.is-active {
+  border-color: var(--crm-accent, #0A84FF);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.crm-option-card-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--crm-text-primary, #F5F5F7);
+  margin-bottom: 4px;
+}
+
+.crm-option-card-desc {
+  font-size: 11.5px;
+  color: var(--crm-text-secondary, #86868B);
+  line-height: 1.4;
+}
+
+/* ── Coolors Dynamic Generator Stage ────────────────────────────────── */
+.crm-coolors-stage {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  height: 220px;
+  margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .crm-coolors-stage {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+}
+
+.crm-coolors-pillar {
+  position: relative;
+  border-radius: var(--crm-radius, 14px);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+  min-height: 180px;
+}
+
+.crm-coolors-pillar:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.crm-coolors-pillar-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0.1) 40%, rgba(0, 0, 0, 0.7) 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.crm-coolors-pillar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.crm-coolors-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #FFFFFF;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.crm-coolors-lock-btn {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #FFFFFF;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  backdrop-filter: blur(8px);
+}
+
+.crm-coolors-lock-btn:hover {
+  background: rgba(0, 0, 0, 0.6);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.crm-coolors-lock-btn.is-locked {
+  background: #FF9F0A;
+  border-color: #FF9F0A;
+  color: #000000;
+}
+
+.crm-coolors-pillar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-coolors-hex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.crm-coolors-hex-input {
+  background: transparent;
+  border: none;
+  color: #FFFFFF;
+  font-family: var(--font-family-mono, monospace);
+  font-size: 13px;
+  font-weight: 700;
+  width: 100%;
+  outline: none;
+  text-align: center;
+}
+
+.crm-coolors-picker-btn {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  position: relative;
+  transition: color 0.15s;
+}
+
+.crm-coolors-picker-btn:hover {
+  color: #FFFFFF;
+}
+
+.crm-coolors-copy-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.crm-coolors-copy-btn:hover {
+  color: #FFFFFF;
+}
+
+.crm-coolors-desc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  margin-top: 2px;
+}
+
+/* ── Custom Accent & Canvas Row ────────────────────────────────────────── */
+.crm-custom-accent-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  flex-wrap: wrap;
+}
+
+.crm-custom-accent-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--crm-text-primary, #F5F5F7);
+}
+
+.crm-custom-accent-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-custom-accent-picker {
+  -webkit-appearance: none;
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.1));
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  padding: 0;
+}
+
+.crm-custom-accent-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.crm-custom-accent-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 7px;
+}
+
+@media (max-width: 768px) {
+  .crm-options-grid {
+    grid-template-columns: 1fr;
+  }
+  .crm-theme-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+
+/* ── Missing Apple chrome used by CRM Settings ─────────────────────────── */
+.crm-ios-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  flex-wrap: wrap;
+}
+.crm-ios-segmented button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--crm-text-secondary, #8E8E93);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  transition: background 150ms ease, color 150ms ease;
+}
+.crm-ios-segmented button:hover { color: var(--crm-text-primary, #fff); }
+.crm-ios-segmented button.is-selected {
+  background: var(--crm-accent, #0A84FF);
+  color: var(--crm-accent-fg, #fff);
+}
+
+.crm-swatches-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.crm-swatch-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--crm-bg, #16171B);
+  border: 1px solid var(--crm-border, rgba(255,255,255,0.08));
+  border-radius: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--crm-text-primary);
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.crm-swatch-chip:hover { transform: translateY(-1px); border-color: var(--crm-border-hover); }
+.crm-swatch-chip.is-selected { border-color: var(--crm-accent); }
+.crm-swatch-circle {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.12) inset;
+  flex-shrink: 0;
+}
+.crm-swatch-label { font-size: 12px; font-weight: 600; }
+.crm-swatch-hex { font-size: 10px; color: var(--crm-text-secondary); font-family: var(--font-family-mono, monospace); margin-left: auto; }
+
+.crm-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid transparent;
+}
+.crm-badge-apple, .crm-badge-primary { background: color-mix(in srgb, var(--crm-accent) 16%, transparent); color: var(--crm-accent); }
+.crm-badge-success { background: rgba(48,209,88,0.15); color: #30D158; }
+.crm-badge-secondary { background: rgba(255,255,255,0.06); color: var(--crm-text-secondary); border-color: var(--crm-border); }
+
+.crm-options-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 720px) { .crm-options-columns { grid-template-columns: 1fr; } }
+.crm-options-group-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--crm-text-primary); margin-bottom: 10px;
+}
+.crm-options-group-help { margin-top: 8px; font-size: 12px; color: var(--crm-text-secondary); line-height: 1.4; }
+
+.crm-theme-card-preview-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; }
+.crm-theme-card-preview-body { padding: 8px; }
+.crm-theme-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+
+.crm-admin-app .crm-settings-collapsible > .crm-settings-accordion-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.crm-admin-app .crm-settings-collapsible > .crm-settings-accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.crm-admin-app .crm-settings-accordion-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.crm-admin-app .crm-settings-accordion-summary h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--crm-text-primary);
+}
+
+.crm-admin-app .crm-settings-accordion-chevron {
+  flex: 0 0 auto;
+  color: var(--crm-text-secondary);
+  transition: transform 160ms ease;
+}
+
+.crm-admin-app .crm-settings-collapsible[open] > .crm-settings-accordion-summary .crm-settings-accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.crm-admin-app .crm-settings-accordion-summary:focus-visible {
+  outline: 2px solid var(--crm-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.crm-admin-app .crm-settings-accordion-scroll {
+  max-height: min(56vh, 560px);
+  margin-top: 14px;
+  padding: 14px 8px 2px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--crm-border) transparent;
+  scrollbar-width: thin;
+  border-top: 1px solid var(--crm-border);
+}
+
+@media (max-width: 680px) {
+  .crm-admin-app .crm-settings-accordion-scroll {
+    max-height: 48vh;
+  }
+}
+
+/* Keep the settings' custom controls ahead of the admin-wide button defaults. */
+.crm-admin-app .crm-coolors-lock-btn {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #FFFFFF;
+}
+
+.crm-admin-app .crm-coolors-lock-btn:hover {
+  background: rgba(0, 0, 0, 0.6);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.crm-admin-app .crm-coolors-lock-btn.is-locked {
+  background: #FF9F0A;
+  border-color: #FF9F0A;
+  color: #000000;
+}
+
+.crm-admin-app .crm-coolors-copy-btn {
+  min-width: 0;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 2px;
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.crm-admin-app .crm-coolors-copy-btn:hover {
+  background: transparent;
+  color: #FFFFFF;
+}
+
+.crm-admin-app .crm-ios-segmented button {
+  min-width: 0;
+  margin: 0;
+}
+
+.crm-admin-app .crm-coolors-hex-input {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #FFFFFF;
+}
+
+.crm-admin-app .crm-swatch-chip {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--crm-bg, #16171B);
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  color: var(--crm-text-primary);
+  text-align: left;
+}
+
+.crm-admin-app .crm-swatch-chip:hover {
+  background: var(--crm-bg, #16171B);
+  border-color: var(--crm-border-hover);
+}
+
+.crm-admin-app .crm-option-card {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  background: var(--crm-bg, #0F1013);
+  border: 1.5px solid var(--crm-border, rgba(255, 255, 255, 0.08));
+  color: var(--crm-text-primary, #F5F5F7);
+}
+
+.crm-admin-app .crm-option-card:hover {
+  background: var(--crm-bg, #0F1013);
+  border-color: var(--crm-border-hover, rgba(255, 255, 255, 0.18));
+}
+
+.crm-admin-app .crm-option-card.is-active {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--crm-accent, #0A84FF);
+}
+
+.crm-admin-app .crm-custom-accent-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--crm-border, rgba(255, 255, 255, 0.1));
+}
