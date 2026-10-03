@@ -249,7 +249,6 @@ const SEED_CLIENTS: PortalClient[] = [
     name: 'Eleanor Vance',
     company: 'Vance Tech Capital',
     email: 'eleanor.vance@vancetech.io',
-    password: 'client123',
     phone: '+1 (415) 890-2341',
     address: '450 Mission St, Suite 1800, San Francisco, CA 94105',
     country: 'United States',
@@ -265,7 +264,6 @@ const SEED_CLIENTS: PortalClient[] = [
     name: 'Marcus Brody',
     company: 'Brody Luxury Goods',
     email: 'marcus@brodydesign.co',
-    password: 'client123',
     phone: '+44 20 7946 0912',
     address: '14 Berkeley Square, Mayfair, London W1J 6BL',
     country: 'United Kingdom',
@@ -281,7 +279,6 @@ const SEED_CLIENTS: PortalClient[] = [
     name: 'Alex Morgan',
     company: 'Morgan Digital Media',
     email: 'client@codexdynamics.com',
-    password: 'client123',
     phone: '+1 (555) 234-5678',
     address: '777 Broadway, 12th Floor, New York, NY 10003',
     country: 'United States',
@@ -1380,7 +1377,7 @@ export const portalDb = {
   getClientPassword(clientId: string): string {
     const db = loadDatabase();
     const client = db.clients.find((c) => c.id === clientId || c.email === clientId);
-    return client?.password || 'client123';
+    return client?.password || '';
   },
 
   getClientActivity(clientId: string): { logs: PortalAuditLog[]; stats: { pageViews: number; sessions: number; lastLogin: string } } {

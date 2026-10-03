@@ -793,7 +793,7 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
 
   useEffect(() => {
     if (!lead?.id) return;
-    const initialPwd = lead?.clientPassword || lead?.client_password || portalDb.getClientPassword(lead.id) || 'client123';
+    const initialPwd = lead?.clientPassword || lead?.client_password || portalDb.getClientPassword(lead.id) || '';
     setLiveClientPassword(initialPwd);
     if (!showSecurityModal) return;
     let cancelled = false;

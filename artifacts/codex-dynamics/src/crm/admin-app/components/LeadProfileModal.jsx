@@ -88,7 +88,7 @@ export default function LeadProfileModal({
     setReassignTeamId(lead.assignedToTeam || lead.assigned_team_id || '');
     setReassignAgentId(lead.assignedToAgent || lead.assigned_agent_id || '');
 
-    const currentPwd = portalDb.getClientPassword(lead.id) || lead.clientPassword || lead.client_password || 'client123';
+    const currentPwd = portalDb.getClientPassword(lead.id) || lead.clientPassword || lead.client_password || '';
     setLiveClientPassword(currentPwd);
     setClientActivityData(portalDb.getClientActivity(lead.id));
     setChatMessages(portalDb.getDirectChatMessages(lead.id));
@@ -808,7 +808,8 @@ export default function LeadProfileModal({
                     <input
                       type={showClientPassword ? 'text' : 'password'}
                       readOnly
-                      value={liveClientPassword || 'client123'}
+                      value={liveClientPassword || ''}
+                      placeholder="No password set"
                       style={{
                         flex: 1,
                         background: 'rgba(255, 255, 255, 0.06)',
@@ -840,7 +841,7 @@ export default function LeadProfileModal({
                     <button
                       type="button"
                       onClick={() => {
-                        navigator.clipboard.writeText(liveClientPassword || 'client123');
+                        navigator.clipboard.writeText(liveClientPassword || '');
                         setPasswordCopied(true);
                         setTimeout(() => setPasswordCopied(false), 2000);
                         showNotification('Password copied to clipboard');

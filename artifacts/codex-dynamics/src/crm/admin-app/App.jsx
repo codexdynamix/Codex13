@@ -50,7 +50,7 @@ import AgentPanel, { LeadProfilePage } from './panels/AgentPanel.jsx';
 import StaffProfilePage from './components/StaffProfilePage.jsx';
 import { UserChrome } from './components/UserChrome.jsx';
 import ReactCapabilityWorkspace from './components/ReactCapabilityWorkspace.jsx';
-import { Crown, Building2, Users, UserCheck, Briefcase, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
+import { Crown, Building2, Users, UserCheck, Briefcase, ArrowRight, ShieldCheck } from 'lucide-react';
 import { applyCrmThemeToDom } from './components/CrmSettings/crmThemeState';
 
 const CRM_ICON_TOKENS = {
@@ -390,32 +390,6 @@ function BackofficeLanding() {
             </div>
           );
         })}
-      </div>
-
-      {/* Direct Access Credentials Grouped Card */}
-      <div style={{
-        width: '100%',
-        maxWidth: 960,
-        marginBottom: 20,
-        background: 'var(--crm-card, #181A20)',
-        border: '1px solid var(--crm-border, rgba(255,255,255,0.08))',
-        borderRadius: 'var(--crm-radius, 14px)',
-        padding: '16px 20px',
-        fontSize: 12.5,
-        color: 'var(--crm-text-secondary, #86868B)',
-        lineHeight: 1.6,
-        textAlign: 'left',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--crm-accent, #0A84FF)', fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
-          <KeyRound size={14} />
-          <span>Direct Access Sandbox Credentials (Instant Login)</span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8, fontFamily: 'monospace', fontSize: 12 }}>
-          <div><strong style={{ color: 'var(--crm-text-primary, #F5F5F7)' }}>Super Admin:</strong> superadmin@codexdynamics.com</div>
-          <div><strong style={{ color: 'var(--crm-text-primary, #F5F5F7)' }}>Office Mgr:</strong> manager@codexdynamics.com</div>
-          <div><strong style={{ color: 'var(--crm-text-primary, #F5F5F7)' }}>Team Leader:</strong> leader@codexdynamics.com</div>
-          <div><strong style={{ color: 'var(--crm-text-primary, #F5F5F7)' }}>Sales Agent:</strong> agent@codexdynamics.com</div>
-        </div>
       </div>
 
       {/* Client Portal Link */}
