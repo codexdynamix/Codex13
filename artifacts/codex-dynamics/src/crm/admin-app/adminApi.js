@@ -584,6 +584,17 @@ export async function saveClientAccessAdmin(clientId, access) {
   });
 }
 
+export async function getClientProfilePermissionsAdmin(clientId) {
+  return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/profile-permissions`);
+}
+
+export async function saveClientProfilePermissionsAdmin(clientId, staffId, permissions) {
+  return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/profile-permissions`, {
+    method: 'PUT',
+    body: { staffId, permissions },
+  });
+}
+
 export async function getClientAccountingAdmin(clientId) {
   return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}`);
 }

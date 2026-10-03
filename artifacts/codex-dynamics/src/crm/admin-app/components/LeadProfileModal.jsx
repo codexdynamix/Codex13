@@ -15,10 +15,12 @@ import {
   deleteLeadApi,
   getAdminMessages,
   sendAdminMessage,
+  getClientProfilePermissionsAdmin,
 } from '../adminApi.js';
 import { useConfirmDialog } from './ConfirmModal/ConfirmModal.jsx';
 import ClientAccessEditor from './ClientAccessEditor.jsx';
 import ClientAccountingPanel from './ClientAccountingPanel.jsx';
+import ClientProfilePermissionManager from './ClientProfilePermissionManager.jsx';
 
 function formatRelativeTime(dateString) {
   if (!dateString) return 'Just now';
@@ -59,6 +61,8 @@ export default function LeadProfileModal({
   const [reassignAgentId, setReassignAgentId] = useState('');
 
   const [profileViewTab, setProfileViewTab] = useState('overview');
+  const [profileSectionPermissions, setProfileSectionPermissions] = useState({});
+  const [profilePermissionsError, setProfilePermissionsError] = useState('');
   const [liveClientPassword, setLiveClientPassword] = useState('');
   const [showClientPassword, setShowClientPassword] = useState(true);
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -78,9 +82,15 @@ export default function LeadProfileModal({
   const [profileHistory, setProfileHistory] = useState([]);
   const [profileHistoryLoading, setProfileHistoryLoading] = useState(false);
   const [profileHistoryError, setProfileHistoryError] = useState('');
+  const isSuperAdmin = currentUser?.role === ROLE.SUPER_ADMIN;
+  const canReadAccessSection = isSuperAdmin || ['read', 'edit'].includes(profileSectionPermissions.access);
+  const canEditAccessSection = isSuperAdmin || profileSectionPermissions.access === 'edit';
+  const canReadAccountingSection = isSuperAdmin || ['read', 'edit'].includes(profileSectionPermissions.accounting);
+  const canEditAccountingSection = isSuperAdmin || profileSectionPermissions.accounting === 'edit';
 
   useEffect(() => {
     if (!lead) return;
+    setProfileViewTab('overview');
     setProfileStage(lead.stage || lead.status || 'New');
     setProfileComment(lead.comment || '');
     setProfileNotes(lead.notes || '');
@@ -120,6 +130,24 @@ export default function LeadProfileModal({
       setProfileHistoryLoading(false);
     }
   }, [lead]);
+
+  useEffect(() => {
+    let active = true;
+    setProfileSectionPermissions({});
+    setProfilePermissionsError('');
+    if (!lead?.id || !currentUser?.id || isSuperAdmin) {
+      return () => { active = false; };
+    }
+
+    getClientProfilePermissionsAdmin(lead.id)
+      .then((result) => {
+        if (active) setProfileSectionPermissions(result.myPermissions || {});
+      })
+      .catch(() => {
+        if (active) setProfilePermissionsError('Could not verify access to this client’s sensitive profile sections.');
+      });
+    return () => { active = false; };
+  }, [lead?.id, currentUser?.id, isSuperAdmin]);
 
   // Real-time synchronization for Support Chat and Passwords
   useEffect(() => {
@@ -696,9 +724,14 @@ export default function LeadProfileModal({
             {[
               { id: 'overview', label: '📋 Profile & Scope', color: '#0A84FF' },
               { id: 'security', label: '🔒 Client Security', color: '#FF453A' },
-              ...(currentUser?.role === ROLE.SUPER_ADMIN ? [
+              ...(canReadAccessSection ? [
                 { id: 'access', label: '🔑 Access & Email', color: '#30D158' },
+              ] : []),
+              ...(canReadAccountingSection ? [
                 { id: 'accounting', label: '💳 Accounting', color: '#0A84FF' },
+              ] : []),
+              ...(isSuperAdmin ? [
+                { id: 'profile-permissions', label: '🔐 Staff Access', color: '#5E5CE6' },
               ] : []),
               { id: 'chat', label: `💬 Client Support ${chatMessages.length ? `(${chatMessages.length})` : ''}`, color: '#30D158' },
               { id: 'activity', label: '📊 Client Activity', color: '#0A84FF' },
@@ -727,6 +760,12 @@ export default function LeadProfileModal({
               );
             })}
           </div>
+
+          {profilePermissionsError && (
+            <div role="alert" style={{ marginBottom: 16, color: '#ff716b', fontSize: 12 }}>
+              {profilePermissionsError} No sensitive profile sections are available until access can be checked.
+            </div>
+          )}
 
           {/* TAB 1: LEAD SECURITY */}
           {profileViewTab === 'security' && (
@@ -939,15 +978,21 @@ export default function LeadProfileModal({
             </div>
           )}
 
-          {profileViewTab === 'access' && currentUser?.role === ROLE.SUPER_ADMIN && (
+          {profileViewTab === 'access' && canReadAccessSection && (
             <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border, rgba(255, 255, 255, 0.08))', borderRadius: 14, padding: 22, marginBottom: 20 }}>
-              <ClientAccessEditor clientId={lead.id} showNotification={showNotification} />
+              <ClientAccessEditor clientId={lead.id} showNotification={showNotification} canEdit={canEditAccessSection} />
             </div>
           )}
 
-          {profileViewTab === 'accounting' && currentUser?.role === ROLE.SUPER_ADMIN && (
+          {profileViewTab === 'accounting' && canReadAccountingSection && (
             <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border, rgba(255, 255, 255, 0.08))', borderRadius: 14, padding: 22, marginBottom: 20 }}>
-              <ClientAccountingPanel clientId={lead.id} showNotification={showNotification} />
+              <ClientAccountingPanel clientId={lead.id} showNotification={showNotification} canEdit={canEditAccountingSection} />
+            </div>
+          )}
+
+          {profileViewTab === 'profile-permissions' && isSuperAdmin && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border, rgba(255, 255, 255, 0.08))', borderRadius: 14, padding: 22, marginBottom: 20 }}>
+              <ClientProfilePermissionManager clientId={lead.id} showNotification={showNotification} />
             </div>
           )}
 

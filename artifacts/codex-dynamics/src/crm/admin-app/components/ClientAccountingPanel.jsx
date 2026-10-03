@@ -59,7 +59,7 @@ function dateInput(value, fallback) {
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString().slice(0, 10);
 }
 
-export default function ClientAccountingPanel({ clientId, showNotification }) {
+export default function ClientAccountingPanel({ clientId, showNotification, canEdit = true }) {
   const [records, setRecords] = useState({ invoices: [], payments: [], hosting: [], domains: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -164,8 +164,10 @@ export default function ClientAccountingPanel({ clientId, showNotification }) {
           <select aria-label="Accounting currency" style={{ ...inputStyle, width: 'auto' }} value={currency} onChange={(e) => setCurrency(e.target.value)}>
             {['USD', 'EUR', 'GBP', 'UAH'].map((value) => <option key={value}>{value}</option>)}
           </select>
-          <button type="button" onClick={() => setMode(mode === 'invoice' ? '' : 'invoice')} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '9px 12px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>New invoice</button>
-          <button type="button" onClick={() => setMode(mode === 'payment' ? '' : 'payment')} style={{ border: 0, borderRadius: 8, padding: '9px 12px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Record payment</button>
+          {canEdit ? <>
+            <button type="button" onClick={() => setMode(mode === 'invoice' ? '' : 'invoice')} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '9px 12px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>New invoice</button>
+            <button type="button" onClick={() => setMode(mode === 'payment' ? '' : 'payment')} style={{ border: 0, borderRadius: 8, padding: '9px 12px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Record payment</button>
+          </> : <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Read-only access</span>}
         </div>
       </div>
 
@@ -184,7 +186,7 @@ export default function ClientAccountingPanel({ clientId, showNotification }) {
 
       {error && <div role="alert" style={{ color: '#ff716b', fontSize: 12 }}>{error}</div>}
 
-      {mode === 'invoice' && (
+      {canEdit && mode === 'invoice' && (
         <form onSubmit={createInvoice} style={{ ...panelStyle, display: 'grid', gap: 13 }}>
           <h4 style={{ margin: 0 }}>Create client invoice</h4>
           {items.map((item, index) => (
@@ -226,7 +228,7 @@ export default function ClientAccountingPanel({ clientId, showNotification }) {
         </form>
       )}
 
-      {mode === 'payment' && (
+      {canEdit && mode === 'payment' && (
         <form onSubmit={recordPayment} style={{ ...panelStyle, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', alignItems: 'end', gap: 10 }}>
           <h4 style={{ gridColumn: '1 / -1', margin: 0 }}>Record a payment and issue a receipt</h4>
           <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--crm-text-secondary, #a1a1aa)' }}>Apply to invoice

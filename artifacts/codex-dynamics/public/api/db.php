@@ -373,6 +373,18 @@ function initSchema(PDO $pdo): void {
         );
     ");
 
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_profile_permissions (
+            client_id VARCHAR(191) NOT NULL,
+            staff_id VARCHAR(191) NOT NULL,
+            profile_section VARCHAR(32) NOT NULL,
+            access_level VARCHAR(16) NOT NULL,
+            granted_by VARCHAR(191) NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (client_id, staff_id, profile_section)
+        );
+    ");
+
     // 15. Client Hosting Table
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS client_hosting (

@@ -63,13 +63,41 @@ function decryptClientSecret(?string $encoded): string {
     return $plainText;
 }
 
-function requireSuperAdmin(PDO $pdo, ?array $session): void {
+function requireActiveAdminStaff(PDO $pdo, ?array $session): array {
     if (!$session) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
-    $stmt = $pdo->prepare("SELECT role, status FROM staff_users WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT id, role, status FROM staff_users WHERE id = ?");
     $stmt->execute([$session['id']]);
     $staff = $stmt->fetch();
     if (!$staff || $staff['status'] !== 'Active') jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
+    return $staff;
+}
+
+function requireSuperAdmin(PDO $pdo, ?array $session): void {
+    $staff = requireActiveAdminStaff($pdo, $session);
     if ($staff['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage client access and accounting.'], 403);
+}
+
+function emptyClientProfilePermissions(): array {
+    return ['access' => 'none', 'accounting' => 'none'];
+}
+
+function requireClientProfileSectionAccess(PDO $pdo, ?array $session, string $clientId, string $section, bool $write): string {
+    $staff = requireActiveAdminStaff($pdo, $session);
+    if ($staff['role'] === 'Super Admin') return 'edit';
+    if (!in_array($staff['role'], ['Office Manager', 'Team Leader', 'Agent'], true)) {
+        jsonResponse(['ok' => false, 'error' => 'This account cannot access client profile sections.'], 403);
+    }
+
+    $stmt = $pdo->prepare('SELECT access_level FROM client_profile_permissions WHERE client_id = ? AND staff_id = ? AND profile_section = ?');
+    $stmt->execute([$clientId, $staff['id'], $section]);
+    $accessLevel = (string)($stmt->fetchColumn() ?: '');
+    if (!in_array($accessLevel, ['read', 'edit'], true)) {
+        jsonResponse(['ok' => false, 'error' => 'You have not been granted access to this client profile section.'], 403);
+    }
+    if ($write && $accessLevel !== 'edit') {
+        jsonResponse(['ok' => false, 'error' => 'This client profile section is read-only for your account.'], 403);
+    }
+    return $accessLevel;
 }
 
 function decodeImapHeader(string $value): string {
@@ -1079,10 +1107,88 @@ if ($apiPath === '/admin/logout' && $method === 'POST') {
     jsonResponse(['ok' => true]);
 }
 
-// Super Admin-only client access and accounting management.
-if (preg_match('#^/admin/clients/([^/]+)/access$#', $apiPath, $clientAccessMatch)) {
+// Per-client grants for Access & Email and Accounting.
+if (preg_match('#^/admin/clients/([^/]+)/profile-permissions$#', $apiPath, $profilePermissionsMatch)) {
+    $clientId = rawurldecode($profilePermissionsMatch[1]);
+    if ($method === 'GET') {
+        $staff = requireActiveAdminStaff($pdo, $adminSession);
+        if ($staff['role'] === 'Super Admin') {
+            $staffRows = $pdo->query("SELECT id, name, email, role FROM staff_users WHERE status = 'Active' AND role IN ('Office Manager', 'Team Leader', 'Agent') ORDER BY name ASC")->fetchAll();
+            $permissions = [];
+            foreach ($staffRows as $staffRow) {
+                $permissions[$staffRow['id']] = emptyClientProfilePermissions();
+            }
+            $grants = $pdo->prepare("
+                SELECT p.staff_id, p.profile_section, p.access_level
+                FROM client_profile_permissions p
+                INNER JOIN staff_users s ON s.id = p.staff_id
+                WHERE p.client_id = ? AND s.status = 'Active'
+                  AND s.role IN ('Office Manager', 'Team Leader', 'Agent')
+            ");
+            $grants->execute([$clientId]);
+            foreach ($grants->fetchAll() as $grant) {
+                if (!isset($permissions[$grant['staff_id']])) continue;
+                if (in_array($grant['profile_section'], ['access', 'accounting'], true)
+                    && in_array($grant['access_level'], ['read', 'edit'], true)) {
+                    $permissions[$grant['staff_id']][$grant['profile_section']] = $grant['access_level'];
+                }
+            }
+            jsonResponse(['ok' => true, 'staff' => $staffRows, 'permissions' => $permissions]);
+        }
+        if (!in_array($staff['role'], ['Office Manager', 'Team Leader', 'Agent'], true)) {
+            jsonResponse(['ok' => false, 'error' => 'This account cannot access client profile sections.'], 403);
+        }
+        $levels = emptyClientProfilePermissions();
+        $stmt = $pdo->prepare('SELECT profile_section, access_level FROM client_profile_permissions WHERE client_id = ? AND staff_id = ?');
+        $stmt->execute([$clientId, $staff['id']]);
+        foreach ($stmt->fetchAll() as $grant) {
+            if (array_key_exists($grant['profile_section'], $levels) && in_array($grant['access_level'], ['read', 'edit'], true)) {
+                $levels[$grant['profile_section']] = $grant['access_level'];
+            }
+        }
+        jsonResponse(['ok' => true, 'myPermissions' => $levels]);
+    }
+
+    if ($method !== 'PUT') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     requireSuperAdmin($pdo, $adminSession);
+    $staffId = trim((string)($input['staffId'] ?? ''));
+    $levels = $input['permissions'] ?? null;
+    if ($staffId === '' || !is_array($levels)) {
+        jsonResponse(['ok' => false, 'error' => 'Choose a staff member and set both section permissions.'], 422);
+    }
+    $accessLevel = (string)($levels['access'] ?? 'none');
+    $accountingLevel = (string)($levels['accounting'] ?? 'none');
+    if (!in_array($accessLevel, ['none', 'read', 'edit'], true)
+        || !in_array($accountingLevel, ['none', 'read', 'edit'], true)) {
+        jsonResponse(['ok' => false, 'error' => 'Permission must be none, read, or edit.'], 422);
+    }
+    $staffCheck = $pdo->prepare("SELECT id FROM staff_users WHERE id = ? AND status = 'Active' AND role IN ('Office Manager', 'Team Leader', 'Agent')");
+    $staffCheck->execute([$staffId]);
+    if (!$staffCheck->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Choose an active office manager, team leader, or agent.'], 422);
+
+    $pdo->beginTransaction();
+    try {
+        foreach (['access' => $accessLevel, 'accounting' => $accountingLevel] as $section => $level) {
+            $pdo->prepare('DELETE FROM client_profile_permissions WHERE client_id = ? AND staff_id = ? AND profile_section = ?')
+                ->execute([$clientId, $staffId, $section]);
+            if ($level !== 'none') {
+                $pdo->prepare('INSERT INTO client_profile_permissions (client_id, staff_id, profile_section, access_level, granted_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+                    ->execute([$clientId, $staffId, $section, $level, $adminSession['id'], date('c')]);
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'permissions' => ['access' => $accessLevel, 'accounting' => $accountingLevel]]);
+}
+
+// Client access and accounting are visible to Super Admins by default. Other
+// staff need an explicit per-client, per-section grant.
+if (preg_match('#^/admin/clients/([^/]+)/access$#', $apiPath, $clientAccessMatch)) {
     $clientId = rawurldecode($clientAccessMatch[1]);
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'access', $method !== 'GET');
     $stmt = $pdo->prepare('SELECT * FROM client_access_credentials WHERE client_id = ?');
     $stmt->execute([$clientId]);
     $existing = $stmt->fetch() ?: null;
@@ -1153,8 +1259,8 @@ if (preg_match('#^/admin/clients/([^/]+)/access$#', $apiPath, $clientAccessMatch
 }
 
 if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
-    requireSuperAdmin($pdo, $adminSession);
     $clientId = rawurldecode($accountingMatch[1]);
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', $method !== 'GET');
     if ($method === 'GET') {
         $invoices = $pdo->prepare('SELECT * FROM client_invoices WHERE client_id = ? ORDER BY issue_date DESC, created_at DESC');
         $invoices->execute([$clientId]);

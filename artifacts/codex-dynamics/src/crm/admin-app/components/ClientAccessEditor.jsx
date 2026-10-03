@@ -34,7 +34,7 @@ function Field({ label, children }) {
   );
 }
 
-export default function ClientAccessEditor({ clientId, showNotification }) {
+export default function ClientAccessEditor({ clientId, showNotification, canEdit = true }) {
   const [access, setAccess] = useState(emptyAccess);
   const [websitePassword, setWebsitePassword] = useState('');
   const [emailPassword, setEmailPassword] = useState('');
@@ -86,13 +86,15 @@ export default function ClientAccessEditor({ clientId, showNotification }) {
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
           <Field label="Back-office link">
-            <input style={inputStyle} type="url" value={access.websiteUrl} onChange={(e) => update('websiteUrl', e.target.value)} placeholder="https://example.com/admin" />
+            <input disabled={!canEdit} style={inputStyle} type="url" value={access.websiteUrl} onChange={(e) => update('websiteUrl', e.target.value)} placeholder="https://example.com/admin" />
           </Field>
           <Field label="Username or email">
-            <input style={inputStyle} value={access.websiteUsername} onChange={(e) => update('websiteUsername', e.target.value)} autoComplete="off" />
+            <input disabled={!canEdit} style={inputStyle} value={access.websiteUsername} onChange={(e) => update('websiteUsername', e.target.value)} autoComplete="off" />
           </Field>
           <Field label={`Password${access.hasWebsitePassword ? ' (saved; leave blank to keep)' : ''}`}>
-            <input style={inputStyle} type="password" value={websitePassword} onChange={(e) => setWebsitePassword(e.target.value)} autoComplete="new-password" />
+            {canEdit
+              ? <input style={inputStyle} type="password" value={websitePassword} onChange={(e) => setWebsitePassword(e.target.value)} autoComplete="new-password" />
+              : <div style={{ ...inputStyle, color: 'var(--crm-text-secondary, #a1a1aa)' }}>{access.hasWebsitePassword ? 'Saved securely · value hidden' : 'Not set'}</div>}
           </Field>
         </div>
       </div>
@@ -104,25 +106,27 @@ export default function ClientAccessEditor({ clientId, showNotification }) {
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
           <Field label="Email address">
-            <input style={inputStyle} type="email" value={access.emailAddress} onChange={(e) => update('emailAddress', e.target.value)} autoComplete="off" />
+            <input disabled={!canEdit} style={inputStyle} type="email" value={access.emailAddress} onChange={(e) => update('emailAddress', e.target.value)} autoComplete="off" />
           </Field>
           <Field label="Hostinger Webmail link">
-            <input style={inputStyle} type="url" value={access.webmailUrl} onChange={(e) => update('webmailUrl', e.target.value)} placeholder="https://mail.hostinger.com" />
+            <input disabled={!canEdit} style={inputStyle} type="url" value={access.webmailUrl} onChange={(e) => update('webmailUrl', e.target.value)} placeholder="https://mail.hostinger.com" />
           </Field>
           <Field label={`Email password${access.hasEmailPassword ? ' (saved; leave blank to keep)' : ''}`}>
-            <input style={inputStyle} type="password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)} autoComplete="new-password" />
+            {canEdit
+              ? <input style={inputStyle} type="password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)} autoComplete="new-password" />
+              : <div style={{ ...inputStyle, color: 'var(--crm-text-secondary, #a1a1aa)' }}>{access.hasEmailPassword ? 'Saved securely · value hidden' : 'Not set'}</div>}
           </Field>
           <Field label="Incoming mail server (IMAP)">
-            <input style={inputStyle} value={access.imapHost} onChange={(e) => update('imapHost', e.target.value)} placeholder="imap.hostinger.com" />
+            <input disabled={!canEdit} style={inputStyle} value={access.imapHost} onChange={(e) => update('imapHost', e.target.value)} placeholder="imap.hostinger.com" />
           </Field>
           <Field label="IMAP port">
-            <input style={inputStyle} type="number" min="1" max="65535" value={access.imapPort} onChange={(e) => update('imapPort', Number(e.target.value))} />
+            <input disabled={!canEdit} style={inputStyle} type="number" min="1" max="65535" value={access.imapPort} onChange={(e) => update('imapPort', Number(e.target.value))} />
           </Field>
           <Field label="Outgoing mail server (SMTP)">
-            <input style={inputStyle} value={access.smtpHost} onChange={(e) => update('smtpHost', e.target.value)} placeholder="smtp.hostinger.com" />
+            <input disabled={!canEdit} style={inputStyle} value={access.smtpHost} onChange={(e) => update('smtpHost', e.target.value)} placeholder="smtp.hostinger.com" />
           </Field>
           <Field label="SMTP port">
-            <input style={inputStyle} type="number" min="1" max="65535" value={access.smtpPort} onChange={(e) => update('smtpPort', Number(e.target.value))} />
+            <input disabled={!canEdit} style={inputStyle} type="number" min="1" max="65535" value={access.smtpPort} onChange={(e) => update('smtpPort', Number(e.target.value))} />
           </Field>
         </div>
         <div style={{ marginTop: 10, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>
@@ -132,10 +136,16 @@ export default function ClientAccessEditor({ clientId, showNotification }) {
 
       {error && <div role="alert" style={{ color: '#ff716b', fontSize: 12 }}>{error}</div>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Only Super Admin can edit these details. Passwords are encrypted at rest and never included in admin list responses.</span>
-        <button type="submit" disabled={saving} style={{ border: 0, borderRadius: 8, padding: '10px 16px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer' }}>
-          {saving ? 'Saving…' : 'Save client access'}
-        </button>
+        <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>
+          {canEdit
+            ? 'Passwords are encrypted at rest and their saved values stay hidden.'
+            : 'Read-only access. Saved passwords remain hidden.'}
+        </span>
+        {canEdit && (
+          <button type="submit" disabled={saving} style={{ border: 0, borderRadius: 8, padding: '10px 16px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer' }}>
+            {saving ? 'Saving…' : 'Save client access'}
+          </button>
+        )}
       </div>
     </form>
   );
