@@ -1005,6 +1005,31 @@ function portalAuthorizationHeaders(): HeadersInit {
   };
 }
 
+function normalizeClientEmail(email: string | null | undefined): string {
+  return String(email ?? '').trim().toLowerCase();
+}
+
+function normalizeClientPhone(phone: string | null | undefined): string {
+  return String(phone ?? '').replace(/\D/g, '');
+}
+
+function assertUniqueClientIdentifiers(
+  clients: PortalClient[],
+  candidate: Pick<PortalClient, 'email' | 'phone'>,
+  excludeClientId?: string,
+): void {
+  const email = normalizeClientEmail(candidate.email);
+  const phone = normalizeClientPhone(candidate.phone);
+  const otherClients = clients.filter((client) => client.id !== excludeClientId);
+
+  if (email && otherClients.some((client) => normalizeClientEmail(client.email) === email)) {
+    throw new Error('A client account with this email address already exists.');
+  }
+  if (phone && otherClients.some((client) => normalizeClientPhone(client.phone) === phone)) {
+    throw new Error('A client account with this phone number already exists.');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CLIENT REPOSITORY (STRICT AUTHORIZATION GUARDS)
 // ---------------------------------------------------------------------------
@@ -1060,10 +1085,13 @@ export const portalDb = {
     const db = loadDatabase();
     const idx = db.clients.findIndex((c) => c.id === client.id);
     if (idx !== -1) {
-      db.clients[idx] = { ...db.clients[idx], ...client };
+      const updatedClient = { ...db.clients[idx], ...client };
+      assertUniqueClientIdentifiers(db.clients, updatedClient, client.id);
+      db.clients[idx] = updatedClient;
       saveDatabase(db);
       return db.clients[idx];
     } else {
+      assertUniqueClientIdentifiers(db.clients, client);
       db.clients.unshift({ ...client });
       saveDatabase(db);
       return client;
@@ -1087,8 +1115,14 @@ export const portalDb = {
     if (data.client) {
       const client = fromApiRow(data.client);
       const index = db.clients.findIndex((item) => item.id === clientId);
-      if (index >= 0) db.clients[index] = { ...db.clients[index], ...client };
-      else db.clients.push(client);
+      if (index >= 0) {
+        const updatedClient = { ...db.clients[index], ...client };
+        assertUniqueClientIdentifiers(db.clients, updatedClient, clientId);
+        db.clients[index] = updatedClient;
+      } else {
+        assertUniqueClientIdentifiers(db.clients, client);
+        db.clients.push(client);
+      }
     }
     const replaceClientRows = (localKey: keyof DatabaseSchema, remoteKey: string) => {
       const rows = Array.isArray(data[remoteKey]) ? data[remoteKey].map(fromApiRow) : [];
@@ -1626,14 +1660,17 @@ export const portalDb = {
     return client;
   },
 
-  adminCreateClient(data: Omit<PortalClient, 'id' | 'createdAt' | 'lastLoginAt'>): PortalClient {
+  adminCreateClient(
+    data: Omit<PortalClient, 'createdAt' | 'lastLoginAt'> & { id?: string },
+  ): PortalClient {
     const db = loadDatabase();
     const newClient: PortalClient = {
       ...data,
-      id: `client_${Date.now()}`,
+      id: data.id || `client_${Date.now()}`,
       createdAt: new Date().toISOString(),
       lastLoginAt: null,
     };
+    assertUniqueClientIdentifiers(db.clients, newClient);
     db.clients.unshift(newClient);
     saveDatabase(db);
     return newClient;
@@ -1659,11 +1696,14 @@ export const portalDb = {
         createdAt: new Date().toISOString(),
         ...updates,
       };
+      assertUniqueClientIdentifiers(db.clients, newClient);
       db.clients.unshift(newClient);
       saveDatabase(db);
       return newClient;
     }
-    db.clients[idx] = { ...db.clients[idx], ...updates };
+    const updatedClient = { ...db.clients[idx], ...updates };
+    assertUniqueClientIdentifiers(db.clients, updatedClient, clientId);
+    db.clients[idx] = updatedClient;
     saveDatabase(db);
     return db.clients[idx];
   },

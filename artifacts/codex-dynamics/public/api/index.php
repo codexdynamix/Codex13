@@ -981,6 +981,15 @@ if (
             $portalLookup = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(TRIM(email)) = ? LIMIT 1');
             $portalLookup->execute([$leadEmail]);
             $existingPortalAccount = $portalLookup->fetch();
+            if ($existingPortalAccount && (string)$existingPortalAccount['id'] !== $userId) {
+                $pdo->rollBack();
+                jsonResponse([
+                    'ok' => false,
+                    'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                    'field' => 'email',
+                    'error' => 'Another client account already uses this email address.',
+                ], 409);
+            }
             if (!$existingPortalAccount) {
                 $conflict = findClientIdentifierConflict($pdo, $leadEmail, (string)($lead['phone'] ?? ''), $userId);
                 if ($conflict !== null) {
@@ -991,6 +1000,25 @@ if (
                         'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
                         'field' => $conflict,
                         'error' => 'Cannot create portal access because another lead or client account already uses this ' . $identifier . '.',
+                    ], 409);
+                }
+            } else {
+                $phoneConflict = findClientIdentifierConflict(
+                    $pdo,
+                    $leadEmail,
+                    (string)($lead['phone'] ?? ''),
+                    $userId,
+                    (string)$existingPortalAccount['id'],
+                    false,
+                    true
+                );
+                if ($phoneConflict !== null) {
+                    $pdo->rollBack();
+                    jsonResponse([
+                        'ok' => false,
+                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                        'field' => 'phone',
+                        'error' => 'Another lead or client account already uses this phone number.',
                     ], 409);
                 }
             }

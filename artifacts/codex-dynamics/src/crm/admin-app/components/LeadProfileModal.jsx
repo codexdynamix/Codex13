@@ -175,28 +175,29 @@ export default function LeadProfileModal({
   };
 
   const handleLaunchClientPortal = () => {
-    let client = portalDb.getClientById(lead.id) || portalDb.getClientByEmail(lead.email);
-    if (!client) {
-      client = {
-        id: lead.id,
-        name: lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Client',
-        company: lead.company || lead.name || 'Client Org',
-        email: lead.email || '',
-        phone: lead.phone || '',
-        address: lead.address || '',
-        country: lead.country || 'United Kingdom',
-        countryCode: lead.country_code || 'GB',
-        status: 'Active',
-        portalEnabled: true,
-        tier: 'Enterprise Partner',
-        lastLoginAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-      };
-      portalDb.adminCreateClient(client);
+    try {
+      let client = portalDb.getClientById(lead.id) || portalDb.getClientByEmail(lead.email);
+      if (!client) {
+        client = portalDb.adminCreateClient({
+          id: lead.id,
+          name: lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Client',
+          company: lead.company || lead.name || 'Client Org',
+          email: lead.email || '',
+          phone: lead.phone || '',
+          address: lead.address || '',
+          country: lead.country || 'United Kingdom',
+          countryCode: lead.country_code || 'GB',
+          status: 'Active',
+          portalEnabled: true,
+          tier: 'Enterprise Partner',
+        });
+      }
+      setPortalSession(client);
+      window.open('/portal/dashboard', '_blank');
+      showNotification(`Launched client portal session for ${client.name}`);
+    } catch (error) {
+      showNotification(error?.message || 'Could not launch the client portal.');
     }
-    setPortalSession(client);
-    window.open('/portal/dashboard', '_blank');
-    showNotification(`Launched client portal session for ${client.name}`);
   };
 
   const handleTogglePortalAccess = () => {
