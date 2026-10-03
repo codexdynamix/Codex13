@@ -237,12 +237,70 @@ function normalizeLeadRow(array $lead): array {
     return $lead;
 }
 
+function normalizeClientPhone(string $phone): string {
+    return preg_replace('/\D+/', '', trim($phone)) ?? '';
+}
+
+function loadClientIdentifierSets(PDO $pdo): array {
+    $emails = [];
+    $phones = [];
+    foreach (['leads', 'portal_clients'] as $table) {
+        $stmt = $pdo->query("SELECT email, phone FROM {$table}");
+        while ($row = $stmt->fetch()) {
+            $email = strtolower(trim((string)($row['email'] ?? '')));
+            if ($email !== '') $emails[$email] = true;
+            $phone = normalizeClientPhone((string)($row['phone'] ?? ''));
+            if ($phone !== '') $phones[$phone] = true;
+        }
+    }
+    return [$emails, $phones];
+}
+
+function findClientIdentifierConflict(
+    PDO $pdo,
+    string $email,
+    string $phone,
+    ?string $excludeLeadId = null,
+    ?string $excludePortalClientId = null,
+    bool $checkEmail = true,
+    bool $checkPhone = true
+): ?string {
+    $email = strtolower(trim($email));
+    if ($checkEmail && $email !== '') {
+        foreach (['leads', 'portal_clients'] as $table) {
+            $sql = "SELECT id FROM {$table} WHERE LOWER(TRIM(COALESCE(email, ''))) = ?";
+            $params = [$email];
+            $excludedId = $table === 'leads' ? $excludeLeadId : $excludePortalClientId;
+            if ($excludedId !== null) {
+                $sql .= ' AND id <> ?';
+                $params[] = $excludedId;
+            }
+            $stmt = $pdo->prepare($sql . ' LIMIT 1');
+            $stmt->execute($params);
+            if ($stmt->fetch()) return 'email';
+        }
+    }
+
+    $normalizedPhone = normalizeClientPhone($phone);
+    if ($checkPhone && $normalizedPhone !== '') {
+        foreach (['leads', 'portal_clients'] as $table) {
+            $stmt = $pdo->query("SELECT id, phone FROM {$table} WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
+            $excludedId = $table === 'leads' ? $excludeLeadId : $excludePortalClientId;
+            while ($row = $stmt->fetch()) {
+                if ($excludedId !== null && (string)$row['id'] === $excludedId) continue;
+                if (normalizeClientPhone((string)$row['phone']) === $normalizedPhone) return 'phone';
+            }
+        }
+    }
+    return null;
+}
+
 function ensurePortalClientForLead(PDO $pdo, array $lead, string $plainPassword, string $now): array {
     $email = strtolower(trim((string)($lead['email'] ?? '')));
     $passwordHash = password_hash($plainPassword, PASSWORD_DEFAULT);
     if ($passwordHash === false) throw new RuntimeException('Could not securely save the client password.');
 
-    $byEmail = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ? LIMIT 1');
+    $byEmail = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(TRIM(email)) = ? LIMIT 1');
     $byEmail->execute([$email]);
     $existing = $byEmail->fetch();
     if ($existing) {
@@ -469,22 +527,44 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         }
 
         $preparedRows = [];
+        $seenEmails = [];
+        $seenPhones = [];
         foreach ($rows as $index => $row) {
             if (!is_array($row)) jsonResponse(['ok' => false, 'error' => 'Invalid lead data on row ' . ($index + 1) . '.'], 400);
             $firstName = trim((string)($row['first_name'] ?? $row['firstName'] ?? ''));
             $lastName = trim((string)($row['last_name'] ?? $row['lastName'] ?? ''));
             $name = trim((string)($row['name'] ?? '')) ?: trim($firstName . ' ' . $lastName);
             $email = strtolower(trim((string)($row['email'] ?? '')));
+            $phone = trim((string)($row['phone'] ?? ''));
             if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 jsonResponse(['ok' => false, 'error' => 'Row ' . ($index + 1) . ' needs a name and a valid email address.'], 400);
             }
+            if (isset($seenEmails[$email])) {
+                jsonResponse([
+                    'ok' => false,
+                    'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                    'field' => 'email',
+                    'error' => 'Row ' . ($index + 1) . ' repeats an email address already present in this upload. No rows were imported.',
+                ], 409);
+            }
+            $seenEmails[$email] = $index + 1;
+            $normalizedPhone = normalizeClientPhone($phone);
+            if ($normalizedPhone !== '' && isset($seenPhones[$normalizedPhone])) {
+                jsonResponse([
+                    'ok' => false,
+                    'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                    'field' => 'phone',
+                    'error' => 'Row ' . ($index + 1) . ' repeats a phone number already present in this upload. No rows were imported.',
+                ], 409);
+            }
+            if ($normalizedPhone !== '') $seenPhones[$normalizedPhone] = $index + 1;
             $preparedRows[] = [
                 'id' => 'ld_' . bin2hex(random_bytes(8)),
                 'first_name' => $firstName,
                 'last_name' => $lastName,
                 'name' => $name,
                 'email' => $email,
-                'phone' => trim((string)($row['phone'] ?? '')),
+                'phone' => $phone,
                 'country' => trim((string)($row['country'] ?? 'United Kingdom')) ?: 'United Kingdom',
                 'country_code' => trim((string)($row['country_code'] ?? $row['countryCode'] ?? 'GB')) ?: 'GB',
                 'stage' => trim((string)($row['stage'] ?? $row['status'] ?? 'New')) ?: 'New',
@@ -510,7 +590,23 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         $importedLeads = [];
         $pdo->beginTransaction();
         try {
-            foreach ($preparedRows as $lead) {
+            [$existingEmails, $existingPhones] = loadClientIdentifierSets($pdo);
+            foreach ($preparedRows as $index => $lead) {
+                $normalizedPhone = normalizeClientPhone($lead['phone']);
+                $conflict = isset($existingEmails[$lead['email']])
+                    ? 'email'
+                    : ($normalizedPhone !== '' && isset($existingPhones[$normalizedPhone]) ? 'phone' : null);
+                if ($conflict !== null) {
+                    $pdo->rollBack();
+                    jsonResponse([
+                        'ok' => false,
+                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                        'field' => $conflict,
+                        'error' => 'Row ' . ($index + 1) . ' uses an ' . ($conflict === 'email' ? 'email address' : 'existing phone number') . ' already used by a lead or client account. No rows were imported.',
+                    ], 409);
+                }
+                $existingEmails[$lead['email']] = true;
+                if ($normalizedPhone !== '') $existingPhones[$normalizedPhone] = true;
                 $insertLead->execute([
                     $lead['id'], $lead['first_name'], $lead['last_name'], $lead['name'], $lead['email'],
                     $lead['phone'], $lead['country'], $lead['country_code'], $lead['stage'], $lead['stage'],
@@ -547,31 +643,52 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
             $firstName = $parts[0] ?? '';
             $lastName = $parts[1] ?? '';
         }
+        $email = strtolower(trim((string)($input['email'] ?? '')));
+        $phone = trim((string)($input['phone'] ?? ''));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 400);
+        }
         $id = 'ld_' . bin2hex(random_bytes(8));
         $now = date('c');
         $stage = trim((string)($input['stage'] ?? $input['status'] ?? 'New')) ?: 'New';
         $source = trim((string)($input['source'] ?? 'manual_crm_entry'));
         $stmt = $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([
-            $id, $firstName, $lastName, $name,
-            trim(strtolower((string)($input['email'] ?? ''))),
-            trim((string)($input['phone'] ?? '')),
-            trim((string)($input['country'] ?? 'United Kingdom')),
-            trim((string)($input['country_code'] ?? 'GB')),
-            $stage, $stage,
-            trim((string)($input['funnel'] ?? $input['service'] ?? 'General')),
-            trim((string)($input['company'] ?? '')),
-            trim((string)($input['service'] ?? '')),
-            trim((string)($input['budget'] ?? '')),
-            trim((string)($input['timeline'] ?? '')),
-            trim((string)($input['message'] ?? '')),
-            $source,
-            trim((string)($input['notes'] ?? '')),
-            $input['assigned_office_id'] ?? null,
-            $input['assigned_team_id'] ?? null,
-            $input['assigned_agent_id'] ?? null,
-            $now, $now,
-        ]);
+        $pdo->beginTransaction();
+        try {
+            $conflict = findClientIdentifierConflict($pdo, $email, $phone);
+            if ($conflict !== null) {
+                $pdo->rollBack();
+                $identifier = $conflict === 'email' ? 'email address' : 'phone number';
+                jsonResponse([
+                    'ok' => false,
+                    'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                    'field' => $conflict,
+                    'error' => 'A lead or client account already uses this ' . $identifier . '.',
+                ], 409);
+            }
+            $stmt->execute([
+                $id, $firstName, $lastName, $name, $email, $phone,
+                trim((string)($input['country'] ?? 'United Kingdom')),
+                trim((string)($input['country_code'] ?? 'GB')),
+                $stage, $stage,
+                trim((string)($input['funnel'] ?? $input['service'] ?? 'General')),
+                trim((string)($input['company'] ?? '')),
+                trim((string)($input['service'] ?? '')),
+                trim((string)($input['budget'] ?? '')),
+                trim((string)($input['timeline'] ?? '')),
+                trim((string)($input['message'] ?? '')),
+                $source,
+                trim((string)($input['notes'] ?? '')),
+                $input['assigned_office_id'] ?? null,
+                $input['assigned_team_id'] ?? null,
+                $input['assigned_agent_id'] ?? null,
+                $now, $now,
+            ]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
         $createdStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id WHERE l.id = ?");
         $createdStmt->execute([$id]);
         jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($createdStmt->fetch())], 201);
@@ -607,6 +724,39 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
             }
             if (isset($updates['stage']) && !isset($updates['status'])) $updates['status'] = $updates['stage'];
             if (isset($updates['status']) && !isset($updates['stage'])) $updates['stage'] = $updates['status'];
+            if (array_key_exists('email', $updates)) {
+                $updates['email'] = strtolower(trim((string)$updates['email']));
+                if ($updates['email'] !== '' && !filter_var($updates['email'], FILTER_VALIDATE_EMAIL)) {
+                    jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 400);
+                }
+            }
+            if (array_key_exists('phone', $updates)) {
+                $updates['phone'] = trim((string)$updates['phone']);
+            }
+            $emailChanged = array_key_exists('email', $updates)
+                && strtolower(trim((string)$updates['email'])) !== strtolower(trim((string)($existingLead['email'] ?? '')));
+            $phoneChanged = array_key_exists('phone', $updates)
+                && normalizeClientPhone((string)$updates['phone']) !== normalizeClientPhone((string)($existingLead['phone'] ?? ''));
+            if ($emailChanged || $phoneChanged) {
+                $conflict = findClientIdentifierConflict(
+                    $pdo,
+                    (string)($updates['email'] ?? $existingLead['email'] ?? ''),
+                    (string)($updates['phone'] ?? $existingLead['phone'] ?? ''),
+                    $leadId,
+                    null,
+                    $emailChanged,
+                    $phoneChanged
+                );
+                if ($conflict !== null) {
+                    $identifier = $conflict === 'email' ? 'email address' : 'phone number';
+                    jsonResponse([
+                        'ok' => false,
+                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                        'field' => $conflict,
+                        'error' => 'Another lead or client account already uses this ' . $identifier . '.',
+                    ], 409);
+                }
+            }
             if (isset($updates['first_name']) || isset($updates['last_name'])) {
                 $first = (string)($updates['first_name'] ?? $existingLead['first_name'] ?? '');
                 $last = (string)($updates['last_name'] ?? $existingLead['last_name'] ?? '');
@@ -828,6 +978,22 @@ if (
 
         $pdo->beginTransaction();
         try {
+            $portalLookup = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(TRIM(email)) = ? LIMIT 1');
+            $portalLookup->execute([$leadEmail]);
+            $existingPortalAccount = $portalLookup->fetch();
+            if (!$existingPortalAccount) {
+                $conflict = findClientIdentifierConflict($pdo, $leadEmail, (string)($lead['phone'] ?? ''), $userId);
+                if ($conflict !== null) {
+                    $pdo->rollBack();
+                    $identifier = $conflict === 'email' ? 'email address' : 'phone number';
+                    jsonResponse([
+                        'ok' => false,
+                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                        'field' => $conflict,
+                        'error' => 'Cannot create portal access because another lead or client account already uses this ' . $identifier . '.',
+                    ], 409);
+                }
+            }
             $portalClient = ensurePortalClientForLead($pdo, $lead, $newPassword, $now);
             $pdo->prepare('UPDATE leads SET client_password = ?, updated_at = ? WHERE id = ?')->execute([$newPassword, $now, $userId]);
             $pdo->commit();
@@ -1571,7 +1737,7 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
     $email = strtolower(trim($input['email'] ?? ''));
     $password = $input['password'] ?? '';
 
-    $stmt = $pdo->prepare("SELECT * FROM portal_clients WHERE LOWER(email) = ?");
+    $stmt = $pdo->prepare("SELECT * FROM portal_clients WHERE LOWER(TRIM(email)) = ?");
     $stmt->execute([$email]);
     $client = $stmt->fetch();
 
