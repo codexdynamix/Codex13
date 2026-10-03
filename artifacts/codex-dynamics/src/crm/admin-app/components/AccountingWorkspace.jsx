@@ -553,11 +553,11 @@ export default function AccountingWorkspace({ showNotification }) {
             <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? 'is-active' : ''} data-testid={`tab-accounting-${key}`} onClick={() => setView(key)}>{label}<span>{key === 'overview' ? accountRows.length : key === 'due' ? dueWorkRows.length : key === 'clients' ? matchingClients.length : activeServices.length}</span></button>
           )}
         </div>
-        {view !== 'clients' && <label className="aw-search">
+        {view !== 'clients' && <div className="aw-search">
           <Search size={15} aria-hidden="true" />
           <input className="aw-search-input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search this view" aria-label="Search accounting records" data-testid="input-accounting-search" />
           {search && <button type="button" className="aw-search-clear" aria-label="Clear search" onClick={() => setSearch('')} data-testid="button-clear-accounting-search"><X size={14} aria-hidden="true" /></button>}
-        </label>}
+        </div>}
       </div>
 
       {view === 'overview' && <div className="aw-panel">
@@ -651,11 +651,11 @@ export default function AccountingWorkspace({ showNotification }) {
       {view === 'clients' && <div className="aw-panel">
         <div className="aw-section-heading"><div><h2>Client accounts</h2><p>Open a shared ledger to review and record client accounting.</p></div><span className="aw-count-label" data-testid="text-client-count">{matchingClients.length} matching clients</span></div>
         <div className="aw-client-tools">
-          <label className="aw-search aw-client-search">
+          <div className="aw-search aw-client-search">
             <Search size={15} aria-hidden="true" />
             <input className="aw-search-input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, company, email, or phone" aria-label="Search clients by name, company, email, or phone" data-testid="input-client-search" />
             {search && <button type="button" className="aw-search-clear" aria-label="Clear client search" onClick={() => setSearch('')} data-testid="button-clear-client-search"><X size={14} aria-hidden="true" /></button>}
-          </label>
+          </div>
           <label className="aw-client-sort"><span>Sort</span><select value={clientSort} onChange={(event) => setClientSort(event.target.value)} aria-label="Sort client accounts" data-testid="select-client-sort">
             <option value="name">Name A–Z</option><option value="overdue">Most overdue</option><option value="open">Most open invoices</option>
           </select></label>
