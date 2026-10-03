@@ -36,75 +36,6 @@ const emptyForm: Inquiry = {
   message: "",
 };
 
-function isJsonResponse(res: Response) {
-  return (res.headers.get("content-type") ?? "").includes("application/json");
-}
-
-async function postCrmLead(
-  data: Inquiry,
-): Promise<"sent" | "unavailable" | "rejected"> {
-  try {
-    const res = await fetch("/api/crm/leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ kind: "enquiry", ...data, source: "website_contact_form" }),
-    });
-    if (!res.ok || !isJsonResponse(res)) return "unavailable";
-    const body = (await res.json()) as { ok?: boolean };
-    return body.ok ? "sent" : "rejected";
-  } catch {
-    return "unavailable";
-  }
-}
-
-async function postFormSubmit(data: Inquiry, recipientEmail?: string): Promise<boolean> {
-  try {
-    const targetEmail = recipientEmail || CONTACT.email;
-    const res = await fetch(`https://formsubmit.co/ajax/${targetEmail}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        name: data.name,
-        phone: data.phone,
-        email: data.email,
-        message: data.message,
-        _subject: `New inquiry from ${data.name} — Codex Dynamics`,
-        _template: "table",
-        _replyto: data.email,
-        _captcha: "false",
-      }),
-    });
-    if (!res.ok) return false;
-    const body = (await res.json().catch(() => null)) as {
-      success?: string | boolean;
-      message?: string;
-    } | null;
-    if (!body) return false;
-    if (body.success === true || body.success === "true") return true;
-    return /activat/i.test(String(body.message ?? ""));
-  } catch {
-    return false;
-  }
-}
-
-function persistInquiry(data: Inquiry) {
-  try {
-    const raw = localStorage.getItem("codex-inquiries");
-    const prior = raw ? (JSON.parse(raw) as unknown[]) : [];
-    localStorage.setItem(
-      "codex-inquiries",
-      JSON.stringify([...prior, { ...data, at: new Date().toISOString(), status: "new" }]),
-    );
-    window.dispatchEvent(new Event("storage"));
-    window.dispatchEvent(new CustomEvent("codex_inquiry_added", { detail: data }));
-  } catch {
-    /* ignore quota */
-  }
-}
-
 export function Contact() {
   const {
     config,
@@ -174,6 +105,8 @@ export function Contact() {
       phone: formData.phone.trim(),
       email: formData.email.trim(),
       company: formData.company?.trim(),
+      budget: formData.budget?.trim(),
+      timeline: formData.timeline?.trim(),
       service: formData.service?.trim(),
       message: finalMessage,
     };
@@ -183,31 +116,13 @@ export function Contact() {
     }
     setIsSubmitting(true);
     try {
-      const leadResponse = await fetch("/api/crm/leads", {
+      const response = await fetch("/api/crm/leads", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "enquiry",
-          name: data.name,
-          email: data.email,
-          phone: data.phone,
-          company: data.company,
-          message: data.message,
-          source: "website_contact_form",
-        }),
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ ...data, source: "website_contact_form" }),
       });
-      if (!leadResponse.ok) throw new Error("Lead capture failed");
-      const capture = await postCrmLead(data);
-      if (capture === "rejected") {
-        toast.error(
-          `Could not send. Email us at ${recipientEmail} or WhatsApp ${phoneVal}.`,
-        );
-        return;
-      }
-      if (capture !== "sent") {
-        await postFormSubmit(data, recipientEmail);
-      }
-      persistInquiry(data);
+      const result = (await response.json().catch(() => null)) as { ok?: boolean } | null;
+      if (!response.ok || !result?.ok) throw new Error("Lead capture failed");
       toast.success("Message sent. We'll be in touch within a day.");
       setFormData(emptyForm);
     } catch {

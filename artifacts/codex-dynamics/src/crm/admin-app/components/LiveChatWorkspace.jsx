@@ -25,7 +25,7 @@ import {
 
 const CHAT_STORAGE_KEY = 'codex_crm_chat_threads_v3';
 
-const INITIAL_THREADS = [
+const LEGACY_DEMO_THREADS = [
   {
     id: 'th_101',
     visitor_name: 'Marcus Sterling',
@@ -233,16 +233,25 @@ const INITIAL_THREADS = [
   },
 ];
 
+const INITIAL_THREADS = [];
+const DEMO_THREAD_IDS = new Set(LEGACY_DEMO_THREADS.map((thread) => thread.id));
+
 export default function LiveChatWorkspace({ showNotification = () => {} }) {
   const [threads, setThreads] = useState(() => {
     try {
       const stored = localStorage.getItem(CHAT_STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter((thread) => !DEMO_THREAD_IDS.has(thread.id));
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(cleaned));
+          }
+          return cleaned;
+        }
       }
     } catch {
-      // Fallback
+      // Start empty if the browser cache cannot be read.
     }
     return INITIAL_THREADS;
   });

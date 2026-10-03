@@ -470,15 +470,11 @@ export const makeLoginLink = (userId, role) => {
 };
 
 /**
- * initialData
- *
- * Empty bootstrap state. The admin app is backend-driven: offices, teams,
- * staff (admins/agents) and leads come from the CRM API on every mount.
- * We intentionally do NOT seed any mock offices, teams,
- * agents, or leads here - those would otherwise drown out the real records
- * the user creates and persists through the CRM panels.
+ * Legacy fixtures are retained only as a source of the old state keys.
+ * `initialData` below exports empty arrays so the admin starts blank and loads
+ * records from the CRM API instead of presenting these sample records.
  */
-export const initialData = {
+const legacyDemoInitialData = {
   users: [
     {
       id: "adm_sa",
@@ -816,6 +812,13 @@ export const initialData = {
   ],
   deletedLeads: [],
 };
+
+export const initialData = Object.fromEntries(
+  Object.entries(legacyDemoInitialData).map(([key, value]) => [
+    key,
+    Array.isArray(value) ? [] : value,
+  ]),
+);
 
 export const getOfficeName = (officeId, offices) => offices.find((o) => o.id === officeId)?.name || '-';
 export const getTeamName = (teamId, teams) => teams.find((t) => t.id === teamId)?.name || '-';

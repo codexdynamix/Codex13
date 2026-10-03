@@ -11,7 +11,6 @@ import {
   Edit3,
   Trash2,
   Copy,
-  RefreshCw,
   CheckCircle2,
   SlidersHorizontal,
   LayoutGrid,
@@ -30,7 +29,7 @@ import {
   Zap,
   Globe
 } from 'lucide-react';
-import { RECENT_WEB_PROJECTS } from '../../../../data/showcaseProjects';
+import { DEMO_SHOWCASE_PROJECT_IDS } from '../../../../types/showcase';
 
 const STORAGE_KEY = 'codex_custom_projects';
 
@@ -44,37 +43,39 @@ const CATEGORIES = [
   'Custom Software',
 ];
 
-const PRESET_SAMPLE_IMAGES = [
-  { label: 'E-Commerce Storefront', url: '/work/northline-logistics.jpg' },
-  { label: 'VoIP Sales CRM', url: '/work/apex-sales.jpg' },
-  { label: 'Branding & Figma UI', url: '/work/brand-identity.jpg' },
-  { label: 'Performance Ads & Funnel', url: '/work/ads-growth.jpg' },
-  { label: 'Lifecycle Marketing', url: '/work/flow-retain-email.jpg' },
-  { label: 'FinTech Deal Pipeline', url: '/work/northline-logistics.jpg' },
-];
-
 export default function ProjectsTab({ showNotification = () => {} }) {
-  // Projects State initialized from localStorage or default showcase data
+  // Preserve user-created projects but remove the known built-in samples.
   const [projects, setProjects] = useState(() => {
     if (typeof window !== 'undefined') {
       try {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
+          if (Array.isArray(parsed)) {
+            return parsed.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
           }
         }
       } catch (err) {
         console.error('Failed to parse stored projects', err);
       }
     }
-    // Default to existing showcase projects
-    return RECENT_WEB_PROJECTS.map(p => ({
-      ...p,
-      published: p.published !== false, // default published
-    }));
+    return [];
   });
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) return;
+      const cleaned = parsed.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+      }
+    } catch (err) {
+      console.error('Failed to clean stored project samples', err);
+    }
+  }, []);
 
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,7 +94,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     client: '',
     category: 'Websites & Web Apps',
     tag: '',
-    completionDate: '2026',
+    completionDate: '',
     site_url: '',
     image: '',
     shortDescription: '',
@@ -103,20 +104,14 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     impact: '',
     techStack: [],
     newTechInput: '',
-    metrics: [
-      { label: 'Conversion Lift', value: '+45%', detail: 'In first 30 days' },
-      { label: 'Lighthouse Score', value: '99/100', detail: 'Mobile & Desktop' },
-    ],
-    features: [
-      'Sub-second edge rendering and zero layout shift',
-      'Instant responsive layout & mobile optimization',
-    ],
+    metrics: [],
+    features: [],
     newFeatureInput: '',
     lighthouse: {
-      performance: 98,
-      accessibility: 100,
-      bestPractices: 100,
-      seo: 100,
+      performance: '',
+      accessibility: '',
+      bestPractices: '',
+      seo: '',
     },
     featured: false,
     published: true,
@@ -163,31 +158,25 @@ export default function ProjectsTab({ showNotification = () => {} }) {
       title: '',
       client: '',
       category: 'Websites & Web Apps',
-      tag: 'Web Development · High-Performance',
-      completionDate: 'Q4 2026',
-      site_url: 'https://',
-      image: '/work/northline-logistics.jpg',
+      tag: '',
+      completionDate: '',
+      site_url: '',
+      image: '',
       shortDescription: '',
       detailedDescription: '',
       challenge: '',
       solution: '',
       impact: '',
-      techStack: ['React 19', 'TypeScript', 'Tailwind CSS'],
+      techStack: [],
       newTechInput: '',
-      metrics: [
-        { label: 'Speed Score', value: '99/100', detail: 'Sub-second load' },
-        { label: 'Conversion Lift', value: '+40%', detail: 'In first 30 days' },
-      ],
-      features: [
-        'Edge-rendered sub-second page delivery',
-        'Custom interactive UI component architecture',
-      ],
+      metrics: [],
+      features: [],
       newFeatureInput: '',
       lighthouse: {
-        performance: 99,
-        accessibility: 100,
-        bestPractices: 100,
-        seo: 100,
+        performance: '',
+        accessibility: '',
+        bestPractices: '',
+        seo: '',
       },
       featured: false,
       published: true,
@@ -204,7 +193,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
       client: proj.client || '',
       category: proj.category || 'Websites & Web Apps',
       tag: proj.tag || '',
-      completionDate: proj.completionDate || '2026',
+      completionDate: proj.completionDate || '',
       site_url: proj.site_url || '',
       image: proj.image || '',
       shortDescription: proj.shortDescription || '',
@@ -218,10 +207,10 @@ export default function ProjectsTab({ showNotification = () => {} }) {
       features: Array.isArray(proj.features) ? [...proj.features] : [],
       newFeatureInput: '',
       lighthouse: proj.lighthouse || {
-        performance: 98,
-        accessibility: 100,
-        bestPractices: 100,
-        seo: 100,
+        performance: '',
+        accessibility: '',
+        bestPractices: '',
+        seo: '',
       },
       featured: Boolean(proj.featured),
       published: proj.published !== false,
@@ -292,15 +281,6 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     showNotification(`${publish ? 'Published' : 'Unpublished'} ${selectedIds.length} project(s).`);
   };
 
-  // Reset to Default 6 Showcase Projects
-  const handleResetToDefaults = () => {
-    if (window.confirm('Reset showcase to factory curated client projects? Custom uploaded projects will be replaced.')) {
-      const defaults = RECENT_WEB_PROJECTS.map(p => ({ ...p, published: true }));
-      persistAndBroadcast(defaults);
-      showNotification('Reset to factory showcase projects.');
-    }
-  };
-
   // Image Upload handler (reads to Base64 DataURL or handles file)
   const handleImageFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -345,7 +325,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
   const handleAddMetric = () => {
     setFormData(prev => ({
       ...prev,
-      metrics: [...prev.metrics, { label: 'New Metric', value: '+30%', detail: 'Performance metric' }]
+      metrics: [...prev.metrics, { label: '', value: '', detail: '' }]
     }));
   };
 
@@ -377,20 +357,20 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     const projectRecord = {
       id: formData.id || `proj-${Date.now()}`,
       title: formData.title.trim(),
-      client: formData.client.trim() || 'Enterprise Client',
+      client: formData.client.trim(),
       category: formData.category,
-      tag: formData.tag.trim() || `${formData.category} · Client Work`,
-      completionDate: formData.completionDate.trim() || '2026',
+      tag: formData.tag.trim(),
+      completionDate: formData.completionDate.trim(),
       site_url: formData.site_url.trim() || '',
-      image: formData.image.trim() || '/work/northline-logistics.jpg',
-      shortDescription: formData.shortDescription.trim() || `${formData.title} engineered for ${formData.client}.`,
+      image: formData.image.trim(),
+      shortDescription: formData.shortDescription.trim(),
       detailedDescription: formData.detailedDescription.trim() || formData.shortDescription.trim(),
-      challenge: formData.challenge.trim() || 'Client required an upgraded high-performance web experience to elevate conversion and brand authority.',
-      solution: formData.solution.trim() || 'Architected a custom digital platform utilizing modern edge rendering, intuitive UX, and robust integrations.',
-      impact: formData.impact.trim() || 'Delivered significant business impact, heightened conversion velocity, and accelerated user engagement.',
-      techStack: formData.techStack.length > 0 ? formData.techStack : ['React 19', 'TypeScript', 'Tailwind CSS'],
-      metrics: formData.metrics.length > 0 ? formData.metrics : [{ label: 'Performance', value: '99/100', detail: 'Edge cached' }],
-      features: formData.features.length > 0 ? formData.features : ['Responsive edge-rendered experience'],
+      challenge: formData.challenge.trim(),
+      solution: formData.solution.trim(),
+      impact: formData.impact.trim(),
+      techStack: formData.techStack,
+      metrics: formData.metrics,
+      features: formData.features,
       lighthouse: formData.lighthouse,
       featured: formData.featured,
       published: formData.published,
@@ -439,9 +419,19 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     const total = projects.length;
     const published = projects.filter(p => p.published).length;
     const featured = projects.filter(p => p.featured).length;
-    const avgLighthouse = Math.round(
-      projects.reduce((acc, p) => acc + (p.lighthouse?.performance || 98), 0) / (total || 1)
+    const scoredProjects = projects.filter(
+      (project) =>
+        project.lighthouse?.performance !== undefined &&
+        project.lighthouse?.performance !== null &&
+        project.lighthouse.performance !== '' &&
+        Number.isFinite(Number(project.lighthouse.performance)),
     );
+    const avgLighthouse = scoredProjects.length
+      ? Math.round(
+          scoredProjects.reduce((acc, project) => acc + Number(project.lighthouse.performance), 0) /
+            scoredProjects.length,
+        )
+      : null;
     return { total, published, featured, avgLighthouse };
   }, [projects]);
 
@@ -462,16 +452,6 @@ export default function ProjectsTab({ showNotification = () => {} }) {
         </div>
 
         <div className="crm-proj-header-actions">
-          <button
-            type="button"
-            className="crm-btn-secondary"
-            onClick={handleResetToDefaults}
-            title="Reset to original 6 showcase projects"
-          >
-            <RefreshCw size={13} />
-            <span>Reset Defaults</span>
-          </button>
-
           <a
             href="/?page=work"
             target="_blank"
@@ -543,7 +523,9 @@ export default function ProjectsTab({ showNotification = () => {} }) {
           </div>
           <div className="crm-proj-stat-info">
             <span className="crm-proj-stat-label">Avg. Lighthouse</span>
-            <span className="crm-proj-stat-value">{stats.avgLighthouse}/100</span>
+            <span className="crm-proj-stat-value">
+              {stats.avgLighthouse === null ? '—' : `${stats.avgLighthouse}/100`}
+            </span>
           </div>
         </div>
       </div>
@@ -680,7 +662,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
         <div className="crm-proj-grid">
           {filteredProjects.map(proj => {
             const isSelected = selectedIds.includes(proj.id);
-            const perfScore = proj.lighthouse?.performance || 98;
+            const perfScore = proj.lighthouse?.performance;
 
             return (
               <div
@@ -690,12 +672,14 @@ export default function ProjectsTab({ showNotification = () => {} }) {
               >
                 {/* Media Image & Status Badges */}
                 <div className="crm-proj-card-media">
-                  <img
-                    src={proj.image || '/work/northline-logistics.jpg'}
-                    alt={proj.title}
-                    className="crm-proj-card-img"
-                    onError={(e) => { e.currentTarget.src = '/work/northline-logistics.jpg'; }}
-                  />
+                  {proj.image && (
+                    <img
+                      src={proj.image}
+                      alt={proj.title}
+                      className="crm-proj-card-img"
+                      onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+                    />
+                  )}
 
                   <div className="crm-proj-media-badges">
                     <div className="crm-proj-badge-left">
@@ -711,7 +695,11 @@ export default function ProjectsTab({ showNotification = () => {} }) {
 
                     <div className="crm-proj-lighthouse-chip" title="Google Lighthouse Score">
                       <Zap size={10} />
-                      <span>{perfScore}/100</span>
+                      <span>
+                        {perfScore === '' || perfScore === undefined || perfScore === null
+                          ? 'No score'
+                          : `${perfScore}/100`}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -720,7 +708,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                 <div className="crm-proj-card-content">
                   <div className="crm-proj-card-meta">
                     <span className="crm-proj-card-client">{proj.client}</span>
-                    <span className="crm-proj-card-date">{proj.completionDate || '2026'}</span>
+                    <span className="crm-proj-card-date">{proj.completionDate || '—'}</span>
                   </div>
 
                   <h3 className="crm-proj-card-title">{proj.title}</h3>
@@ -878,11 +866,16 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                       />
                     </td>
                     <td>
-                      <img
-                        src={proj.image || '/work/northline-logistics.jpg'}
-                        alt={proj.title}
-                        style={{ width: 44, height: 32, borderRadius: 5, objectFit: 'cover' }}
-                      />
+                      {proj.image ? (
+                        <img
+                          src={proj.image}
+                          alt={proj.title}
+                          style={{ width: 44, height: 32, borderRadius: 5, objectFit: 'cover' }}
+                          onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+                        />
+                      ) : (
+                        <ImageIcon size={16} aria-label="No project image" />
+                      )}
                     </td>
                     <td>
                       <div style={{ fontWeight: 600, color: '#FFFFFF' }}>{proj.title}</div>
@@ -893,7 +886,11 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <span style={{ color: '#0ECB81', fontWeight: 700, fontSize: 12 }}>
-                        {proj.lighthouse?.performance || 98}/100
+                        {proj.lighthouse?.performance === '' ||
+                        proj.lighthouse?.performance === undefined ||
+                        proj.lighthouse?.performance === null
+                          ? '—'
+                          : `${proj.lighthouse.performance}/100`}
                       </span>
                     </td>
                     <td style={{ textAlign: 'center' }}>
@@ -1114,21 +1111,6 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                   />
                 </div>
 
-                {/* Quick Presets for Demo */}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 11, color: 'var(--crm-text-secondary)', alignSelf: 'center' }}>Presets:</span>
-                  {PRESET_SAMPLE_IMAGES.map(preset => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, image: preset.url })}
-                      className="crm-btn-secondary"
-                      style={{ padding: '2px 8px', fontSize: 11 }}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* 3. Narrative & Case Study */}
@@ -1277,7 +1259,10 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                       value={formData.lighthouse.performance}
                       onChange={e => setFormData({
                         ...formData,
-                        lighthouse: { ...formData.lighthouse, performance: Number(e.target.value) || 98 }
+                        lighthouse: {
+                          ...formData.lighthouse,
+                          performance: e.target.value === '' ? '' : Number(e.target.value),
+                        }
                       })}
                     />
                   </div>
@@ -1290,7 +1275,10 @@ export default function ProjectsTab({ showNotification = () => {} }) {
                       value={formData.lighthouse.seo}
                       onChange={e => setFormData({
                         ...formData,
-                        lighthouse: { ...formData.lighthouse, seo: Number(e.target.value) || 100 }
+                        lighthouse: {
+                          ...formData.lighthouse,
+                          seo: e.target.value === '' ? '' : Number(e.target.value),
+                        }
                       })}
                     />
                   </div>

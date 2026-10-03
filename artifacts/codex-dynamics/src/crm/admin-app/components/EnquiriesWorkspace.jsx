@@ -12,73 +12,6 @@ import {
 } from 'lucide-react';
 import { StatusDropdown } from '../shared';
 
-const DEFAULT_SEED_ENQUIRIES = [
-  {
-    id: 1789912001,
-    leadId: 'ld_enq_1789912001',
-    name: 'Eleanor Vance',
-    email: 'eleanor.vance@vancetech.io',
-    phone: '+1 (415) 890-2341',
-    company: 'Vance Tech Capital',
-    service: 'High-Performance Website',
-    budget: '$15,000 - $25,000',
-    timeline: 'Within 1 Month',
-    message: 'We need a complete rebuild of our venture fund corporate portal with real-time portfolio performance dashboards and interactive investor LP access.',
-    source: 'website_contact_modal',
-    status: 'new',
-    created_at: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
-    notes: 'High priority lead. Referred through LinkedIn showcase.',
-  },
-  {
-    id: 1789912002,
-    leadId: 'ld_enq_1789912002',
-    name: 'Marcus Brody',
-    email: 'marcus@brodydesign.co',
-    phone: '+44 20 7946 0912',
-    company: 'Brody Luxury Goods',
-    service: 'Web Design & UI/UX',
-    budget: '$10,000 - $18,000',
-    timeline: 'Immediate',
-    message: 'Looking for a bespoke e-commerce experience with 3D product previews and ultra-fast mobile checkout similar to Apple storefront aesthetics.',
-    source: 'website_contact_form',
-    status: 'contacted',
-    created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-    notes: 'Initial introduction email sent. Waiting for brand asset pack.',
-  },
-  {
-    id: 1789912003,
-    leadId: 'ld_enq_1789912003',
-    name: 'Dr. Sarah Lin',
-    email: 'slin@biovista.health',
-    phone: '+1 (617) 555-0198',
-    company: 'BioVista Health',
-    service: 'Full-Stack Web App',
-    budget: '$30,000+',
-    timeline: '1-3 Months',
-    message: 'Seeking a custom CRM and patient onboarding platform with integrated telephony/VoIP calling and HIPAA-compliant data routing.',
-    source: 'website_contact_form',
-    status: 'new',
-    created_at: new Date(Date.now() - 1000 * 60 * 540).toISOString(),
-    notes: '',
-  },
-  {
-    id: 1789912004,
-    leadId: 'ld_enq_1789912004',
-    name: 'Julian Rossi',
-    email: 'j.rossi@rossimotors.it',
-    phone: '+39 02 8765 4321',
-    company: 'Rossi Dynamics',
-    service: 'SEO & Digital Marketing',
-    budget: '$5,000 - $10,000/mo',
-    timeline: 'Ongoing Retainer',
-    message: 'We want to scale our European customer acquisition with Google & Meta Ads performance campaigns and automated retention funnels.',
-    source: 'website_contact_modal',
-    status: 'converted',
-    created_at: new Date(Date.now() - 1000 * 60 * 60 * 28).toISOString(),
-    notes: 'Agreement signed. Kickoff scheduled for next Tuesday.',
-  },
-];
-
 function formatRelativeTime(dateString) {
   if (!dateString) return '-';
   try {
@@ -399,12 +332,7 @@ export default function EnquiriesWorkspace({
       }
     }
 
-    // If still empty, supply realistic default seed enquiries
-    if (merged.length === 0) {
-      combined = DEFAULT_SEED_ENQUIRIES;
-    } else {
-      combined = merged;
-    }
+    combined = merged;
 
     // Sort newest first
     combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());

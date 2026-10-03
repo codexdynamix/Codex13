@@ -16,12 +16,9 @@ import {
 import { ImageWithFallback } from "@/components/ImageWithFallback";
 import { Reveal } from "@/components/Reveal";
 import { useContactModal } from "@/context/ContactModalContext";
-import type { Project as CrmProject } from "@/types/crm";
 import { cn } from "@/lib/utils";
-import {
-  RECENT_WEB_PROJECTS,
-  type ShowcaseProject,
-} from "@/data/showcaseProjects";
+import type { ShowcaseProject } from "@/types/showcase";
+import { DEMO_SHOWCASE_PROJECT_IDS } from "@/types/showcase";
 
 const DEFAULT_CATEGORIES = [
   "All",
@@ -39,16 +36,17 @@ export function ProjectShowcaseGrid() {
         const stored = localStorage.getItem("codex_custom_projects");
         if (stored) {
           const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Only show published projects on the public site
-            return parsed.filter((p: any) => p.published !== false);
+          if (Array.isArray(parsed)) {
+            return parsed.filter(
+              (p: any) => p.published !== false && !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
+            );
           }
         }
       } catch (err) {
         console.warn("Failed to read custom projects from storage", err);
       }
     }
-    return RECENT_WEB_PROJECTS;
+    return [];
   });
 
   // Listen for real-time project updates from the CRM
@@ -58,21 +56,34 @@ export function ProjectShowcaseGrid() {
         const stored = localStorage.getItem("codex_custom_projects");
         if (stored) {
           const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProjects(parsed.filter((p: any) => p.published !== false));
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.filter(
+              (p: any) => !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
+            );
+            if (cleaned.length !== parsed.length) {
+              localStorage.setItem("codex_custom_projects", JSON.stringify(cleaned));
+            }
+            setProjects(cleaned.filter((p: any) => p.published !== false));
           }
+        } else {
+          setProjects([]);
         }
       } catch (err) {
         console.warn("Failed to sync updated projects", err);
       }
     };
+    handleProjectsSync();
 
     window.addEventListener("storage", handleProjectsSync);
     window.addEventListener("codex_projects_updated", handleProjectsSync);
 
     const handleWindowMessage = (event: MessageEvent) => {
       if (event.data?.type === "CODEX_PROJECTS_UPDATE" && Array.isArray(event.data.projects)) {
-        setProjects(event.data.projects.filter((p: any) => p.published !== false));
+        setProjects(
+          event.data.projects.filter(
+            (p: any) => p.published !== false && !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
+          ),
+        );
       }
     };
     window.addEventListener("message", handleWindowMessage);
@@ -249,24 +260,30 @@ export function ProjectShowcaseGrid() {
           </div>
         </Reveal>
 
-        {/* Empty state if search has no results */}
+        {/* Empty state until published projects are added */}
         {filteredProjects.length === 0 && (
           <div className="my-16 text-center py-12 rounded-2xl border border-dashed border-hairline bg-card/50">
             <Layers className="size-10 text-subtle mx-auto mb-3 opacity-60" />
-            <h3 className="text-lg font-medium text-label">No projects found</h3>
+            <h3 className="text-lg font-medium text-label">
+              {projects.length === 0 ? "No published projects yet" : "No projects found"}
+            </h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Try adjusting your search query or filter category.
+              {projects.length === 0
+                ? "Published client projects will appear here."
+                : "Try adjusting your search query or filter category."}
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveCategory("All");
-                setSearchQuery("");
-              }}
-              className="mt-4 rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background hover:opacity-90"
-            >
-              Reset Filters
-            </button>
+            {projects.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveCategory("All");
+                  setSearchQuery("");
+                }}
+                className="mt-4 rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background hover:opacity-90"
+              >
+                Reset Filters
+              </button>
+            )}
           </div>
         )}
 
