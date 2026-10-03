@@ -19,11 +19,56 @@ $apiPath = preg_replace('#\.php$#', '', $apiPath);
 
 $input = json_decode(file_get_contents('php://input') ?: '[]', true) ?: [];
 
+function bearerToken(): string {
+    $header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    if (!$header && function_exists('getallheaders')) {
+        $headers = getallheaders();
+        $header = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    }
+    return preg_match('/^Bearer\s+(\S+)$/i', $header, $matches) ? $matches[1] : '';
+}
+
+function findSession(PDO $pdo, string $table, string $ownerColumn): ?array {
+    $token = bearerToken();
+    if ($token === '') return null;
+    $stmt = $pdo->prepare("SELECT {$ownerColumn} AS owner_id FROM {$table} WHERE token_hash = ? AND expires_at > ?");
+    $stmt->execute([hash('sha256', $token), date('c')]);
+    $row = $stmt->fetch();
+    return $row ? ['id' => $row['owner_id']] : null;
+}
+
+$adminSession = null;
+$portalSession = null;
+$isAdminLogin = in_array($apiPath, ['/admin/login', '/admin/bootstrap', '/admin/setup-status'], true);
+$isPortalLogin = $apiPath === '/portal/login';
+if (str_starts_with($apiPath, '/admin/') && !$isAdminLogin) {
+    $adminSession = findSession($pdo, 'admin_sessions', 'user_id');
+    if (!$adminSession) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
+}
+if (($apiPath === '/portal/data' || $apiPath === '/portal/profile' || $apiPath === '/portal/ticket' || $apiPath === '/portal/notifications' || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
+    $portalSession = findSession($pdo, 'portal_sessions', 'client_id');
+    if (!$portalSession && $apiPath === '/portal/data' && $method === 'GET') {
+        $admin = findSession($pdo, 'admin_sessions', 'user_id');
+        if ($admin) {
+            $roleStmt = $pdo->prepare("SELECT role FROM staff_users WHERE id = ? AND status = 'Active'");
+            $roleStmt->execute([$admin['id']]);
+            if ($roleStmt->fetchColumn() === 'Super Admin') {
+                $portalSession = ['id' => trim($_GET['client_id'] ?? ''), 'impersonating' => true];
+            }
+        }
+    }
+    if (!$portalSession) jsonResponse(['ok' => false, 'error' => 'Client sign-in required.'], 401);
+}
+
 if ($apiPath === '/healthz') {
     jsonResponse([
         'status' => 'ok',
         'database' => $pdo->getAttribute(PDO::ATTR_DRIVER_NAME),
     ]);
+}
+
+if ($apiPath === '/admin/setup-status' && $method === 'GET') {
+    jsonResponse(['ok' => true, 'setupRequired' => (int)$pdo->query("SELECT COUNT(*) FROM staff_users")->fetchColumn() === 0]);
 }
 
 // -----------------------------------------------------------------------------
@@ -250,7 +295,48 @@ if ($apiPath === '/admin/notifications/send') {
     jsonResponse(['ok' => true, 'id' => $id, 'sent' => 1]);
 }
 
-if ($apiPath === '/admin/notifications/sent-log' || $apiPath === '/client/notifications' || $apiPath === '/portal/notifications') {
+if ($apiPath === '/client/notifications' || $apiPath === '/portal/notifications') {
+    $clientId = $portalSession['id'];
+    if ($method === 'POST') {
+        $now = date('c');
+        if (($input['action'] ?? '') === 'mark_all_read') {
+            $stmt = $pdo->prepare("SELECT id FROM notifications WHERE user_id = ? OR user_id IS NULL OR user_id = ''");
+            $stmt->execute([$clientId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $notificationId) {
+                $update = $pdo->prepare("UPDATE user_notification_reads SET read_at = ? WHERE user_id = ? AND notification_id = ?");
+                $update->execute([$now, $clientId, $notificationId]);
+                if ($update->rowCount() === 0) {
+                    $pdo->prepare("INSERT INTO user_notification_reads (user_id, notification_id, read_at) VALUES (?, ?, ?)")
+                        ->execute([$clientId, $notificationId, $now]);
+                }
+            }
+        } elseif (!empty($input['id'])) {
+            $notificationId = trim((string)$input['id']);
+            $update = $pdo->prepare("UPDATE user_notification_reads SET read_at = ? WHERE user_id = ? AND notification_id = ?");
+            $update->execute([$now, $clientId, $notificationId]);
+            if ($update->rowCount() === 0) {
+                $pdo->prepare("INSERT INTO user_notification_reads (user_id, notification_id, read_at) VALUES (?, ?, ?)")
+                    ->execute([$clientId, $notificationId, $now]);
+            }
+        } else {
+            jsonResponse(['ok' => false, 'error' => 'Notification action is required.'], 400);
+        }
+        jsonResponse(['ok' => true]);
+    }
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $stmt = $pdo->prepare("
+        SELECT n.*, CASE WHEN r.notification_id IS NOT NULL THEN 1 ELSE n.is_read END AS is_read
+        FROM notifications n
+        LEFT JOIN user_notification_reads r ON r.notification_id = n.id AND r.user_id = ?
+        WHERE n.user_id = ? OR n.user_id IS NULL OR n.user_id = ''
+        ORDER BY n.created_at DESC LIMIT 100
+    ");
+    $stmt->execute([$clientId, $clientId]);
+    $logs = $stmt->fetchAll();
+    jsonResponse(['ok' => true, 'notifications' => $logs, 'total' => count($logs)]);
+}
+
+if ($apiPath === '/admin/notifications/sent-log') {
     if ($method === 'DELETE') {
         $pdo->exec("DELETE FROM notifications");
         jsonResponse(['ok' => true]);
@@ -270,11 +356,12 @@ if ($apiPath === '/admin/notifications/sent-log' || $apiPath === '/client/notifi
 // 7. ADMIN <-> CLIENT SUPPORT CHAT
 // -----------------------------------------------------------------------------
 if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
+    $isClientMessageRoute = $apiPath === '/client/messages';
     if ($method === 'POST') {
-        $userId = trim($input['user_id'] ?? $input['userId'] ?? '');
+        $userId = $isClientMessageRoute ? $portalSession['id'] : trim($input['user_id'] ?? $input['userId'] ?? '');
         $body = trim($input['body'] ?? $input['text'] ?? '');
-        $sender = ($input['sender'] ?? '') === 'client' ? 'client' : 'agent';
-        $senderName = $input['sender_name'] ?? ($sender === 'client' ? 'Client' : 'Support Agent');
+        $sender = $isClientMessageRoute ? 'client' : 'agent';
+        $senderName = $isClientMessageRoute ? 'Client' : ($adminSession['id'] ?? 'Support Agent');
 
         if (!$userId || !$body) {
             jsonResponse(['ok' => false, 'error' => 'user_id and body required'], 400);
@@ -308,7 +395,7 @@ if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
         ]);
     }
 
-    $userId = trim($_GET['user_id'] ?? '');
+    $userId = $isClientMessageRoute ? $portalSession['id'] : trim($_GET['user_id'] ?? '');
     if (!$userId) {
         jsonResponse(['ok' => true, 'messages' => [], 'unread_count' => 0]);
     }
@@ -573,15 +660,56 @@ if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === '
 // -----------------------------------------------------------------------------
 // 13. AUTHENTICATION: STAFF LOGIN
 // -----------------------------------------------------------------------------
+if ($apiPath === '/admin/bootstrap' && $method === 'POST') {
+    if ((int)$pdo->query("SELECT COUNT(*) FROM staff_users")->fetchColumn() !== 0) {
+        jsonResponse(['ok' => false, 'error' => 'Administrator setup is already complete.'], 409);
+    }
+    $email = strtolower(trim($input['email'] ?? ''));
+    $name = trim($input['name'] ?? '');
+    $password = $input['password'] ?? '';
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || $name === '' || strlen($password) < 12) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a valid email, name, and password of at least 12 characters.'], 400);
+    }
+    $id = 'adm_' . bin2hex(random_bytes(8));
+    $now = date('c');
+    $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'security' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
+    $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, status, capabilities, created_at, last_login_at) VALUES (?, ?, ?, ?, 'Super Admin', 'Active', ?, ?, ?)")
+        ->execute([$id, $email, password_hash($password, PASSWORD_DEFAULT), $name, $caps, $now, $now]);
+    $token = bin2hex(random_bytes(32));
+    $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+        ->execute([hash('sha256', $token), $id, date('c', time() + 86400 * 14), $now]);
+    jsonResponse(['ok' => true, 'token' => $token, 'user' => [
+        'id' => $id, 'name' => $name, 'email' => $email, 'role' => 'Super Admin',
+        'office_id' => null, 'team_id' => null, 'status' => 'Active',
+        'last_login_at' => $now, 'capabilities' => json_decode($caps, true),
+    ]]);
+}
+
+if ($apiPath === '/admin/me' && $method === 'GET') {
+    $stmt = $pdo->prepare("SELECT id, name, email, role, office_id, team_id, status, capabilities, last_login_at FROM staff_users WHERE id = ?");
+    $stmt->execute([$adminSession['id']]);
+    $staff = $stmt->fetch();
+    if (!$staff || $staff['status'] !== 'Active') jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
+    $staff['capabilities'] = json_decode($staff['capabilities'] ?: '{}', true);
+    jsonResponse(['ok' => true, 'user' => $staff]);
+}
+
+if ($apiPath === '/admin/logout' && $method === 'POST') {
+    $token = bearerToken();
+    $pdo->prepare("DELETE FROM admin_sessions WHERE token_hash = ?")->execute([hash('sha256', $token)]);
+    jsonResponse(['ok' => true]);
+}
+
 if ($apiPath === '/admin/login' && $method === 'POST') {
     $email = strtolower(trim($input['email'] ?? ''));
-    $password = trim($input['password'] ?? '');
+    $password = $input['password'] ?? '';
 
     $stmt = $pdo->prepare("SELECT * FROM staff_users WHERE LOWER(email) = ?");
     $stmt->execute([$email]);
     $staff = $stmt->fetch();
 
-    if (!$staff || $staff['password'] !== $password) {
+    $validPassword = $staff && (password_verify($password, $staff['password']) || hash_equals((string)$staff['password'], (string)$password));
+    if (!$validPassword) {
         jsonResponse(['ok' => false, 'error' => 'Invalid staff email or password.'], 401);
     }
     if ($staff['status'] !== 'Active') {
@@ -590,7 +718,12 @@ if ($apiPath === '/admin/login' && $method === 'POST') {
 
     $now = date('c');
     $pdo->prepare("UPDATE staff_users SET last_login_at = ? WHERE id = ?")->execute([$now, $staff['id']]);
-    $token = "token_{$staff['id']}_" . time();
+    if (!password_get_info($staff['password'])['algo']) {
+        $pdo->prepare("UPDATE staff_users SET password = ? WHERE id = ?")->execute([password_hash($password, PASSWORD_DEFAULT), $staff['id']]);
+    }
+    $token = bin2hex(random_bytes(32));
+    $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+        ->execute([hash('sha256', $token), $staff['id'], date('c', time() + 86400 * 14), $now]);
 
     jsonResponse([
         'ok' => true,
@@ -616,7 +749,7 @@ if ($apiPath === '/admin/login' && $method === 'POST') {
 // -----------------------------------------------------------------------------
 if ($apiPath === '/portal/login' && $method === 'POST') {
     $email = strtolower(trim($input['email'] ?? ''));
-    $password = trim($input['password'] ?? '');
+    $password = $input['password'] ?? '';
 
     $stmt = $pdo->prepare("SELECT * FROM portal_clients WHERE LOWER(email) = ?");
     $stmt->execute([$email]);
@@ -628,13 +761,18 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
     if (empty($client['portal_enabled'])) {
         jsonResponse(['ok' => false, 'error' => 'This client portal account is currently disabled.'], 403);
     }
-    if (!empty($client['password']) && $password !== '' && $client['password'] !== $password) {
+    if ($password === '' || !$client['password'] || !(password_verify($password, $client['password']) || hash_equals((string)$client['password'], (string)$password))) {
         jsonResponse(['ok' => false, 'error' => 'Incorrect password. Please try again.'], 401);
+    }
+    if (!password_get_info($client['password'])['algo']) {
+        $pdo->prepare("UPDATE portal_clients SET password = ? WHERE id = ?")->execute([password_hash($password, PASSWORD_DEFAULT), $client['id']]);
     }
 
     $now = date('c');
     $pdo->prepare("UPDATE portal_clients SET last_login_at = ? WHERE id = ?")->execute([$now, $client['id']]);
-    $token = "cdx_sess_{$client['id']}_" . time();
+    $token = bin2hex(random_bytes(32));
+    $pdo->prepare("INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+        ->execute([hash('sha256', $token), $client['id'], date('c', time() + 86400 * 14), $now]);
 
     jsonResponse([
         'ok' => true,
@@ -665,8 +803,9 @@ if ($apiPath === '/portal/data') {
     if (!$clientId) {
         jsonResponse(['error' => 'Missing client_id parameter'], 400);
     }
+    if (empty($portalSession['impersonating']) && $clientId !== $portalSession['id']) jsonResponse(['ok' => false, 'error' => 'Forbidden.'], 403);
 
-    $stmtC = $pdo->prepare("SELECT * FROM portal_clients WHERE id = ?");
+    $stmtC = $pdo->prepare("SELECT id, name, company, email, phone, address, country, country_code, status, portal_enabled, tier, last_login_at, created_at FROM portal_clients WHERE id = ?");
     $stmtC->execute([$clientId]);
     $client = $stmtC->fetch() ?: null;
 
@@ -686,6 +825,24 @@ if ($apiPath === '/portal/data') {
     $stmtT->execute([$clientId]);
     $tickets = $stmtT->fetchAll();
 
+    $collections = [];
+    foreach ([
+        'payments' => 'client_payments',
+        'hosting' => 'client_hosting',
+        'domains' => 'client_domains',
+        'files' => 'client_files',
+    ] as $key => $table) {
+        $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE client_id = ?");
+        $stmt->execute([$clientId]);
+        $collections[$key] = $stmt->fetchAll();
+    }
+    $stmtN = $pdo->prepare("SELECT * FROM notifications WHERE user_id = ? OR user_id IS NULL OR user_id = '' ORDER BY created_at DESC");
+    $stmtN->execute([$clientId]);
+    $notifications = $stmtN->fetchAll();
+    $stmtM = $pdo->prepare("SELECT * FROM messages WHERE user_id = ? ORDER BY created_at ASC");
+    $stmtM->execute([$clientId]);
+    $messages = $stmtM->fetchAll();
+
     jsonResponse([
         'ok' => true,
         'client' => $client,
@@ -693,24 +850,44 @@ if ($apiPath === '/portal/data') {
         'projects' => $projects,
         'invoices' => $invoices,
         'tickets' => $tickets,
-        'notifications' => [],
+        'payments' => $collections['payments'],
+        'hosting' => $collections['hosting'],
+        'domains' => $collections['domains'],
+        'files' => $collections['files'],
+        'notifications' => $notifications,
+        'messages' => $messages,
     ]);
+}
+
+if ($apiPath === '/portal/profile' && $method === 'POST') {
+    if (!empty($portalSession['impersonating'])) jsonResponse(['ok' => false, 'error' => 'Impersonation is read-only.'], 403);
+    $clientId = $portalSession['id'];
+    $updates = [];
+    foreach (['name', 'company', 'phone', 'address', 'country'] as $field) {
+        if (array_key_exists($field, $input)) $updates[$field] = trim((string)$input[$field]);
+    }
+    if (!empty($input['password'])) $updates['password'] = password_hash((string)$input['password'], PASSWORD_DEFAULT);
+    if (!$updates) jsonResponse(['ok' => false, 'error' => 'No profile changes were provided.'], 400);
+    $set = implode(', ', array_map(static fn($key) => "{$key} = ?", array_keys($updates)));
+    $pdo->prepare("UPDATE portal_clients SET {$set} WHERE id = ?")->execute([...array_values($updates), $clientId]);
+    jsonResponse(['ok' => true]);
 }
 
 // -----------------------------------------------------------------------------
 // 16. CLIENT PORTAL: SUPPORT TICKETS
 // -----------------------------------------------------------------------------
 if ($apiPath === '/portal/ticket' && $method === 'POST') {
-    $clientId = $input['clientId'] ?? $input['client_id'] ?? '';
+    if (!empty($portalSession['impersonating'])) jsonResponse(['ok' => false, 'error' => 'Impersonation is read-only.'], 403);
+    $clientId = $portalSession['id'];
     $ticketId = $input['ticketId'] ?? $input['ticket_id'] ?? '';
     $text = trim($input['text'] ?? $input['message'] ?? '');
-    $sender = $input['sender'] ?? 'client';
-    $senderName = $input['senderName'] ?? $input['sender_name'] ?? 'Client';
+    $sender = 'client';
+    $senderName = 'Client';
     $now = date('c');
 
     if ($ticketId) {
-        $stmtEx = $pdo->prepare("SELECT * FROM client_support_tickets WHERE id = ?");
-        $stmtEx->execute([$ticketId]);
+        $stmtEx = $pdo->prepare("SELECT * FROM client_support_tickets WHERE id = ? AND client_id = ?");
+        $stmtEx->execute([$ticketId, $clientId]);
         $existing = $stmtEx->fetch();
         if ($existing) {
             $msgs = json_decode($existing['messages'] ?: '[]', true) ?: [];
@@ -722,16 +899,20 @@ if ($apiPath === '/portal/ticket' && $method === 'POST') {
         }
     } else {
         $newId = 'tick_' . time();
-        $ticketNum = 'TICK-' . rand(100, 999);
+        $ticketNum = 'TICK-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
         $subject = $input['subject'] ?? 'Support Request';
         $category = $input['category'] ?? 'General';
         $priority = $input['priority'] ?? 'Medium';
         $initialMsgs = [['id' => 'msg_' . time(), 'sender' => 'client', 'senderName' => $senderName, 'text' => $text, 'createdAt' => $now]];
 
-        $pdo->prepare("INSERT INTO client_support_tickets (id, client_id, ticket_number, subject, category, priority, status, assigned_agent, messages, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'Open', 'Alex Agent', ?, ?, ?)")
+        $pdo->prepare("INSERT INTO client_support_tickets (id, client_id, ticket_number, subject, category, priority, status, assigned_agent, messages, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'Open', NULL, ?, ?, ?)")
             ->execute([$newId, $clientId, $ticketNum, $subject, $category, $priority, json_encode($initialMsgs), $now, $now]);
 
-        jsonResponse(['ok' => true, 'ticket_id' => $newId, 'ticket_number' => $ticketNum]);
+        $stmtNew = $pdo->prepare("SELECT * FROM client_support_tickets WHERE id = ?");
+        $stmtNew->execute([$newId]);
+        $ticket = $stmtNew->fetch();
+        $ticket['messages'] = $initialMsgs;
+        jsonResponse(['ok' => true, 'ticket_id' => $newId, 'ticket_number' => $ticketNum, 'ticket' => $ticket]);
     }
 }
 

@@ -21,13 +21,13 @@ export function PortalProfile({ client, onNavigate }: PortalProfileProps) {
   const [billingAlerts, setBillingAlerts] = useState(true);
   const [securityAlerts, setSecurityAlerts] = useState(true);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSavedSuccess(false);
 
     try {
-      portalDb.updateClientProfile(client.id, {
+      await portalDb.updateClientProfile(client.id, {
         name,
         company,
         phone,

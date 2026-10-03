@@ -95,89 +95,33 @@ export function mapAdminToUser(admin) {
  */
 export async function adminLogin(email, password, requestedRole) {
   const normEmail = (email || '').toLowerCase().trim();
-
-  try {
-    const res = await fetch('/api/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: normEmail, password, role: requestedRole }),
-    });
-
-    const data = await res.json();
-    if (res.ok && data.ok && data.user) {
-      setAdminToken(data.token);
-      setStoredAdminProfile(data.user);
-      return data.user;
-    }
-
-    if (data.error) {
-      throw new Error(data.error);
-    }
-  } catch (err) {
-    if (err.message && !err.message.includes('fetch')) {
-      throw err;
-    }
+  const res = await fetch('/api/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: normEmail, password, role: requestedRole }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok || !data.user || !data.token) {
+    throw new Error(data.error || 'Sign in failed. Please check your credentials and try again.');
   }
+  setAdminToken(data.token);
+  setStoredAdminProfile(data.user);
+  return data.user;
+}
 
-  // Fallback for offline resilience
-  let role = requestedRole || 'Super Admin';
-  let name = 'Sarah Admin';
-  let id = 'adm_sa';
-  let officeId = null;
-  let teamId = null;
-
-  if (normEmail.includes('manager') || role === 'Office Manager') {
-    role = 'Office Manager';
-    name = 'Olivia Manager';
-    id = 'adm_om';
-    officeId = 'of_london';
-  } else if (normEmail.includes('leader') || role === 'Team Leader') {
-    role = 'Team Leader';
-    name = 'Thomas Leader';
-    id = 'adm_tl';
-    officeId = 'of_london';
-    teamId = 'tm_alpha';
-  } else if (normEmail.includes('agent') || role === 'Agent') {
-    role = 'Agent';
-    name = 'Alex Agent';
-    id = 'adm_ag';
-    officeId = 'of_london';
-    teamId = 'tm_alpha';
-  } else if (normEmail.includes('admin') || role === 'Super Admin') {
-    role = 'Super Admin';
-    name = 'Sarah Admin';
-    id = 'adm_sa';
-  } else if (normEmail) {
-    name = normEmail.split('@')[0].replace(/[._]/g, ' ');
-    name = name.charAt(0).toUpperCase() + name.slice(1);
-    id = `adm_${Math.random().toString(36).slice(2, 7)}`;
+export async function adminBootstrap({ name, email, password }) {
+  const res = await fetch('/api/admin/bootstrap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok || !data.user || !data.token) {
+    throw new Error(data.error || 'Could not create the initial administrator account.');
   }
-
-  const localAdmin = {
-    id,
-    name,
-    email: normEmail || `${role.toLowerCase().replace(/\s+/g, '')}@codexdynamics.com`,
-    role,
-    office_id: officeId,
-    team_id: teamId,
-    status: 'Active',
-    last_login_at: new Date().toISOString(),
-    capabilities: {
-      lead_upload: true,
-      create_agent: true,
-      registrations: true,
-      notifications: true,
-      security: true,
-      content: true,
-      enquiries: true,
-      chat: true,
-    },
-  };
-
-  const token = `token_${id}_${Date.now()}`;
-  setAdminToken(token);
-  setStoredAdminProfile(localAdmin);
-  return localAdmin;
+  setAdminToken(data.token);
+  setStoredAdminProfile(data.user);
+  return data.user;
 }
 
 /**
@@ -187,7 +131,17 @@ export async function adminLogin(email, password, requestedRole) {
  * out even if the network call fails).
  */
 export async function adminLogout() {
-  clearAdminSession();
+  const token = getAdminToken();
+  try {
+    if (token) {
+      await fetch('/api/admin/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+  } finally {
+    clearAdminSession();
+  }
 }
 
 /**
@@ -195,29 +149,20 @@ export async function adminLogout() {
  * Validates the stored token and returns a fresh admin profile.
  */
 export async function fetchAdminMe() {
-  const stored = getStoredAdminProfile();
-  if (stored) return stored;
-  const admin = {
-    id: 'adm_sa',
-    name: 'Sarah Admin',
-    email: 'superadmin@codexdynamics.com',
-    role: 'Super Admin',
-    status: 'Active',
-    last_login_at: new Date().toISOString(),
-    capabilities: {
-      lead_upload: true,
-      create_agent: true,
-      registrations: true,
-      notifications: true,
-      security: true,
-      content: true,
-      enquiries: true,
-      chat: true,
-    },
-  };
-  setStoredAdminProfile(admin);
-  setAdminToken('token_adm_sa');
-  return admin;
+  if (!getAdminToken()) return null;
+  let data;
+  try {
+    data = await adminFetch('/api/admin/me');
+  } catch (error) {
+    if (error?.status === 401) clearAdminSession();
+    throw error;
+  }
+  if (!data?.ok || !data.user) {
+    clearAdminSession();
+    return null;
+  }
+  setStoredAdminProfile(data.user);
+  return data.user;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,23 +556,22 @@ async function adminFetch(path, { method = 'GET', body } = {}) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (body) headers['Content-Type'] = 'application/json';
 
-  try {
-    const res = await withTimeout(
-      fetch(path, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      }),
-      8000
-    );
-    if (res.ok) {
-      const data = await res.json();
-      return data;
-    }
-  } catch (err) {
-    // Graceful fallback to local mock / local storage
+  const res = await withTimeout(
+    fetch(path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+    8000
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.ok === false) {
+    const error = new Error(data?.error || `Request failed (${res.status})`);
+    error.status = res.status;
+    error.code = data?.code;
+    throw error;
   }
-  return handleLocalMock(path, method, body);
+  return data;
 }
 
 export async function getClientWorkspaceAdmin(userId) {

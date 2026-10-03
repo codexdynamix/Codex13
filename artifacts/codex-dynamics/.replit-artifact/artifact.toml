@@ -12,10 +12,10 @@ paths = [ "/" ]
 localPort = 23839
 
 [services.development]
-run = "pnpm --filter @workspace/codex-dynamics run dev"
+run = "npm run dev --workspace=@workspace/codex-dynamics"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/codex-dynamics", "run", "build" ]
+build = [ "npm", "run", "build", "--workspace=@workspace/codex-dynamics" ]
 serve = "static"
 publicDir = "artifacts/codex-dynamics/dist/public"
 

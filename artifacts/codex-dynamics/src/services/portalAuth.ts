@@ -64,8 +64,10 @@ export function readPortalSession(): PortalSession | null {
 
     // If accessing via admin authority, bypass password and disabled check
     if (isImpersonating) {
+      const adminToken = localStorage.getItem('codex_admin_token');
+      if (!adminToken) return null;
       return {
-        token: token || `cdx_sess_${client.id}_${Date.now()}`,
+        token: adminToken,
         client,
         loginTime: Date.now(),
       };
@@ -77,8 +79,12 @@ export function readPortalSession(): PortalSession | null {
       clearPortalSession();
       return null;
     }
+    if (!token) {
+      clearPortalSession();
+      return null;
+    }
     return {
-      token: token || `cdx_sess_${freshClient.id}_${Date.now()}`,
+      token,
       client: freshClient,
       loginTime: Date.now(),
     };
@@ -91,11 +97,15 @@ export function readPortalSession(): PortalSession | null {
   }
 }
 
-export function setPortalSession(client: PortalClient): PortalSession {
+export function setPortalSession(client: PortalClient, serverToken?: string): PortalSession {
   // Ensure the client is recorded in portal database
   portalDb.upsertClient(client);
 
-  const token = `cdx_sess_${client.id}_${Date.now()}`;
+  const impersonating = sessionStorage.getItem('codex_impersonating_admin') === 'true';
+  const token = serverToken
+    || (impersonating ? localStorage.getItem('codex_admin_token') : localStorage.getItem(PORTAL_TOKEN_KEY))
+    || '';
+  if (!token) throw new Error('A valid server session is required.');
   const session: PortalSession = {
     token,
     client,
@@ -157,44 +167,15 @@ export function clearPortalSession(): void {
  */
 export async function portalLogin(email: string, password?: string): Promise<PortalClient> {
   const cleanEmail = email.toLowerCase().trim();
-
-  try {
-    const res = await fetch('/api/portal/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, password }),
-    });
-
-    const data = await res.json();
-    if (res.ok && data.ok && data.client) {
-      setPortalSession(data.client);
-      return data.client;
-    }
-
-    if (data.error) {
-      throw new Error(data.error);
-    }
-  } catch (err: any) {
-    if (err.message && !err.message.includes('fetch')) {
-      throw err;
-    }
+  const res = await fetch('/api/portal/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: cleanEmail, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok || !data.client || !data.token) {
+    throw new Error(data.error || 'Client sign-in failed. Please check your details and try again.');
   }
-
-  const client = portalDb.getClientByEmail(cleanEmail);
-
-  if (!client) {
-    throw new Error('No client account found with this email address. Please check your spelling or contact your Codex Dynamics account manager.');
-  }
-
-  if (!client.portalEnabled || client.status !== 'Active') {
-    throw new Error('This client portal account is currently disabled or suspended. Please contact Codex Dynamics support.');
-  }
-
-  // In production, compare hashed passwords. If password is provided, verify.
-  if (client.password && password && client.password !== password) {
-    throw new Error('Incorrect password. Please try again or use direct login assistance.');
-  }
-
-  setPortalSession(client);
-  return client;
+  setPortalSession(data.client, data.token);
+  return data.client;
 }

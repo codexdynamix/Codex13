@@ -29,6 +29,7 @@ export function PortalSupport({ client }: PortalSupportProps) {
   const [replyText, setReplyText] = useState('');
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   // New Ticket Form State
   const [subject, setSubject] = useState('');
@@ -74,47 +75,42 @@ export function PortalSupport({ client }: PortalSupportProps) {
     setShowMobileChat(true);
   };
 
-  const handleSendReply = (e: React.FormEvent) => {
+  const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = replyText.trim();
     if (!selectedTicket || !text) return;
 
-    portalDb.addSupportTicketReply(client.id, selectedTicket.id, text);
-    setReplyText('');
-    const updated = portalDb.getSupportTickets(client.id);
-    setTickets(updated);
-
-    // Sync to backend messages endpoint
-    fetch('/api/admin/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: client.id,
-        body: text,
-        sender: 'client',
-        sender_name: client.name || 'Client',
-      }),
-    }).catch(() => {});
+    setActionError('');
+    try {
+      await portalDb.addSupportTicketReply(client.id, selectedTicket.id, text);
+      setReplyText('');
+      setTickets(portalDb.getSupportTickets(client.id));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not send the reply.');
+    }
   };
 
-  const handleCreateTicket = (e: React.FormEvent) => {
+  const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!subject.trim() || !message.trim()) return;
 
-    const created = portalDb.createSupportTicket(client.id, {
-      subject: subject.trim(),
-      category,
-      priority,
-      message: message.trim(),
-    });
-
-    const updated = portalDb.getSupportTickets(client.id);
-    setTickets(updated);
-    setSelectedTicketId(created.id);
-    setShowMobileChat(true);
-    setCreateModalOpen(false);
-    setSubject('');
-    setMessage('');
+    setActionError('');
+    try {
+      const created = await portalDb.createSupportTicket(client.id, {
+        subject: subject.trim(),
+        category,
+        priority,
+        message: message.trim(),
+      });
+      setTickets(portalDb.getSupportTickets(client.id));
+      setSelectedTicketId(created.id);
+      setShowMobileChat(true);
+      setCreateModalOpen(false);
+      setSubject('');
+      setMessage('');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not create the ticket.');
+    }
   };
 
   return (
@@ -138,6 +134,12 @@ export function PortalSupport({ client }: PortalSupportProps) {
           <span>New Ticket</span>
         </button>
       </div>
+
+      {actionError && (
+        <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {actionError}
+        </div>
+      )}
 
       {/* Main Telegram/Signal Style Joined Split Workspace */}
       <div className="flex-1 min-h-0 bg-white dark:bg-[#18181B] rounded-3xl border border-black/[0.08] dark:border-white/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.03)] flex overflow-hidden">

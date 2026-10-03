@@ -55,7 +55,9 @@ function getDb(): PDO {
         ]);
     } else {
         // SQLite fallback - zero-config for Hostinger
-        $dataDir = __DIR__ . '/data';
+        // Keep the database outside the public document root. The API directory
+        // lives under public/api, so walking up two levels reaches the artifact root.
+        $dataDir = dirname(__DIR__, 2) . '/data';
         if (!is_dir($dataDir)) {
             @mkdir($dataDir, 0755, true);
         }
@@ -423,10 +425,35 @@ function initSchema(PDO $pdo): void {
         );
     ");
 
-    seedInitialData($pdo);
+    // Business data is created through the API. Do not repopulate deleted records
+    // with sample rows when the database is empty.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portal_sessions (
+            token_hash TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS user_notification_reads (
+            user_id TEXT NOT NULL,
+            notification_id TEXT NOT NULL,
+            read_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, notification_id)
+        );
+    ");
 }
 
 function seedInitialData(PDO $pdo): void {
+    // Demo rows are intentionally disabled. Retain this no-op temporarily so
+    // older deployments that call this helper cannot repopulate deleted data.
+    return;
+
     // Seed Clients if empty
     $count = (int)$pdo->query("SELECT COUNT(*) FROM portal_clients")->fetchColumn();
     if ($count === 0) {

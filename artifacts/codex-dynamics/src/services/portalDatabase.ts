@@ -932,8 +932,6 @@ const SEED_AUDIT_LOGS: PortalAuditLog[] = [
 // DATA STORAGE ENGINE
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'cdx_portal_database_v3';
-
 interface DatabaseSchema {
   clients: PortalClient[];
   websites: ClientWebsite[];
@@ -950,108 +948,63 @@ interface DatabaseSchema {
   ssoTokens: SsoTokenRecord[];
 }
 
+let currentDatabase: DatabaseSchema | null = null;
+
+function createEmptyDatabase(): DatabaseSchema {
+  return {
+    clients: [],
+    websites: [],
+    projects: [],
+    invoices: [],
+    payments: [],
+    hosting: [],
+    domains: [],
+    supportTickets: [],
+    files: [],
+    messages: [],
+    notifications: [],
+    auditLogs: [],
+    ssoTokens: [],
+  };
+}
+
 function loadDatabase(): DatabaseSchema {
-  if (typeof window === 'undefined') {
-    return {
-      clients: SEED_CLIENTS,
-      websites: SEED_WEBSITES,
-      projects: SEED_PROJECTS,
-      invoices: SEED_INVOICES,
-      payments: SEED_PAYMENTS,
-      hosting: SEED_HOSTING,
-      domains: SEED_DOMAINS,
-      supportTickets: SEED_SUPPORT_TICKETS,
-      files: SEED_FILES,
-      messages: SEED_MESSAGES,
-      notifications: SEED_NOTIFICATIONS,
-      auditLogs: SEED_AUDIT_LOGS,
-      ssoTokens: [],
-    };
-  }
-
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      const initial: DatabaseSchema = {
-        clients: SEED_CLIENTS,
-        websites: SEED_WEBSITES,
-        projects: SEED_PROJECTS,
-        invoices: SEED_INVOICES,
-        payments: SEED_PAYMENTS,
-        hosting: SEED_HOSTING,
-        domains: SEED_DOMAINS,
-        supportTickets: SEED_SUPPORT_TICKETS,
-        files: SEED_FILES,
-        messages: SEED_MESSAGES,
-        notifications: SEED_NOTIFICATIONS,
-        auditLogs: SEED_AUDIT_LOGS,
-        ssoTokens: [],
-      };
-      saveDatabase(initial);
-      return initial;
-    }
-
-    const parsed = JSON.parse(raw);
-    const rawDomains = parsed.domains || SEED_DOMAINS;
-    const safeDomains = (Array.isArray(rawDomains) ? rawDomains : SEED_DOMAINS).map((d: any) => ({
-      ...d,
-      nameservers: Array.isArray(d?.nameservers) && d.nameservers.length > 0
-        ? d.nameservers
-        : (typeof d?.nameservers === 'string' && d.nameservers.trim()
-          ? d.nameservers.split(',').map((s: string) => s.trim())
-          : ['ns1.codexdynamics.net', 'ns2.codexdynamics.net']),
-      renewalStatus: d?.renewalStatus || 'Auto-Renew Active',
-      expirationDate: d?.expirationDate || '2027-01-01',
-      domainName: d?.domainName || 'domain.com',
-      registrar: d?.registrar || 'Codex Managed',
-      autoRenew: typeof d?.autoRenew === 'boolean' ? d.autoRenew : true,
-    }));
-
-    // Merge any missing collections gracefully
-    return {
-      clients: parsed.clients || SEED_CLIENTS,
-      websites: parsed.websites || SEED_WEBSITES,
-      projects: parsed.projects || SEED_PROJECTS,
-      invoices: parsed.invoices || SEED_INVOICES,
-      payments: parsed.payments || SEED_PAYMENTS,
-      hosting: parsed.hosting || SEED_HOSTING,
-      domains: safeDomains,
-      supportTickets: parsed.supportTickets || SEED_SUPPORT_TICKETS,
-      files: parsed.files || SEED_FILES,
-      messages: parsed.messages || SEED_MESSAGES,
-      notifications: parsed.notifications || SEED_NOTIFICATIONS,
-      auditLogs: parsed.auditLogs || SEED_AUDIT_LOGS,
-      ssoTokens: parsed.ssoTokens || [],
-    };
-  } catch (e) {
-    console.error('[portalDatabase] load failed, resetting to seed', e);
-    return {
-      clients: SEED_CLIENTS,
-      websites: SEED_WEBSITES,
-      projects: SEED_PROJECTS,
-      invoices: SEED_INVOICES,
-      payments: SEED_PAYMENTS,
-      hosting: SEED_HOSTING,
-      domains: SEED_DOMAINS,
-      supportTickets: SEED_SUPPORT_TICKETS,
-      files: SEED_FILES,
-      messages: SEED_MESSAGES,
-      notifications: SEED_NOTIFICATIONS,
-      auditLogs: SEED_AUDIT_LOGS,
-      ssoTokens: [],
-    };
-  }
+  currentDatabase ??= createEmptyDatabase();
+  return currentDatabase;
 }
 
 function saveDatabase(db: DatabaseSchema): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-    // Trigger custom event so any active portal tabs or CRM panels reactively update
+  currentDatabase = db;
+  if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cdx_portal_database_updated'));
-  } catch (e) {
-    console.error('[portalDatabase] save failed', e);
   }
+}
+
+function fromApiRow(row: any): any {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+  const normalized = Object.fromEntries(Object.entries(row).map(([key, rawValue]) => {
+    let value = rawValue;
+    if (typeof value === 'string' && /^[\[{]/.test(value.trim())) {
+      try { value = JSON.parse(value); } catch { /* keep plain text */ }
+    }
+    if (Array.isArray(value)) value = value.map(fromApiRow);
+    else if (value && typeof value === 'object') value = fromApiRow(value);
+    let normalizedKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+    if (normalizedKey === 'isRead') normalizedKey = 'read';
+    if (normalizedKey === 'assignedAgent') normalizedKey = 'assignedStaff';
+    if (normalizedKey === 'sender' && value === 'agent') value = 'staff';
+    if (normalizedKey === 'portalEnabled') value = Boolean(value);
+    return [normalizedKey, value];
+  }));
+  return normalized;
+}
+
+function portalAuthorizationHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('cdx_portal_session_token_v2') : null;
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,48 +1080,36 @@ export const portalDb = {
 
   async syncWithServer(clientId: string): Promise<void> {
     if (typeof window === 'undefined' || !clientId) return;
-    try {
-      const res = await fetch(`/api/portal/data?client_id=${encodeURIComponent(clientId)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.ok) {
-          const db = loadDatabase();
-          if (data.client) {
-            const idx = db.clients.findIndex((c) => c.id === clientId);
-            if (idx !== -1) db.clients[idx] = { ...db.clients[idx], ...data.client };
-            else db.clients.push(data.client);
-          }
-          if (Array.isArray(data.websites) && data.websites.length > 0) {
-            db.websites = [...db.websites.filter((w) => w.clientId !== clientId), ...data.websites];
-          }
-          if (Array.isArray(data.projects) && data.projects.length > 0) {
-            db.projects = [...db.projects.filter((p) => p.clientId !== clientId), ...data.projects];
-          }
-          if (Array.isArray(data.invoices) && data.invoices.length > 0) {
-            db.invoices = [...db.invoices.filter((i) => i.clientId !== clientId), ...data.invoices];
-          }
-          if (Array.isArray(data.payments) && data.payments.length > 0) {
-            db.payments = [...db.payments.filter((p) => p.clientId !== clientId), ...data.payments];
-          }
-          if (Array.isArray(data.hosting) && data.hosting.length > 0) {
-            db.hosting = [...db.hosting.filter((h) => h.clientId !== clientId), ...data.hosting];
-          }
-          if (Array.isArray(data.domains) && data.domains.length > 0) {
-            db.domains = [...db.domains.filter((d) => d.clientId !== clientId), ...data.domains];
-          }
-          if (Array.isArray(data.tickets) && data.tickets.length > 0) {
-            db.supportTickets = [...db.supportTickets.filter((t) => t.clientId !== clientId), ...data.tickets];
-          }
-          if (Array.isArray(data.files) && data.files.length > 0) {
-            db.files = [...db.files.filter((f) => f.clientId !== clientId), ...data.files];
-          }
-          saveDatabase(db);
-        }
-      }
-    } catch (_) {}
+    const res = await fetch(`/api/portal/data?client_id=${encodeURIComponent(clientId)}`, {
+      headers: portalAuthorizationHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `Could not load portal data (${res.status}).`);
+    const db = loadDatabase();
+    if (data.client) {
+      const client = fromApiRow(data.client);
+      const index = db.clients.findIndex((item) => item.id === clientId);
+      if (index >= 0) db.clients[index] = { ...db.clients[index], ...client };
+      else db.clients.push(client);
+    }
+    const replaceClientRows = (localKey: keyof DatabaseSchema, remoteKey: string) => {
+      const rows = Array.isArray(data[remoteKey]) ? data[remoteKey].map(fromApiRow) : [];
+      (db[localKey] as any[]) = [...(db[localKey] as any[]).filter((row) => row.clientId !== clientId), ...rows];
+    };
+    replaceClientRows('websites', 'websites');
+    replaceClientRows('projects', 'projects');
+    replaceClientRows('invoices', 'invoices');
+    replaceClientRows('payments', 'payments');
+    replaceClientRows('hosting', 'hosting');
+    replaceClientRows('domains', 'domains');
+    replaceClientRows('supportTickets', 'tickets');
+    replaceClientRows('files', 'files');
+    db.notifications = (Array.isArray(data.notifications) ? data.notifications : []).map(fromApiRow);
+    db.messages = (Array.isArray(data.messages) ? data.messages : []).map(fromApiRow);
+    saveDatabase(db);
   },
 
-  updateClientProfile(clientId: string, updates: Partial<PortalClient>): PortalClient {
+  async updateClientProfile(clientId: string, updates: Partial<PortalClient>): Promise<PortalClient> {
     const db = loadDatabase();
     const idx = db.clients.findIndex((c) => c.id === clientId);
     if (idx === -1) throw new Error('Client not found');
@@ -1180,9 +1121,18 @@ export const portalDb = {
       phone: updates.phone,
       address: updates.address,
       country: updates.country,
-      password: updates.password || db.clients[idx].password,
+      password: updates.password || undefined,
     };
 
+    const response = await fetch('/api/portal/profile', {
+      method: 'POST',
+      headers: portalAuthorizationHeaders(),
+      body: JSON.stringify(safeUpdates),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `Could not save profile (${response.status}).`);
+    }
     db.clients[idx] = {
       ...db.clients[idx],
       ...safeUpdates,
@@ -1190,17 +1140,6 @@ export const portalDb = {
 
     saveDatabase(db);
     this.logAudit(clientId, db.clients[idx].name, 'PROFILE_UPDATED', 'Updated client profile and contact preferences');
-
-    try {
-      fetch('/api/portal/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId,
-          ...safeUpdates,
-        }),
-      }).catch(() => {});
-    } catch (_) {}
 
     return db.clients[idx];
   },
@@ -1266,14 +1205,7 @@ export const portalDb = {
 
   getDomains(clientId: string): ClientDomain[] {
     const db = loadDatabase();
-    return db.domains
-      .filter((d) => d.clientId === clientId)
-      .map((d) => ({
-        ...d,
-        nameservers: Array.isArray(d.nameservers) && d.nameservers.length > 0
-          ? d.nameservers
-          : ['ns1.codexdynamics.net', 'ns2.codexdynamics.net'],
-      }));
+    return db.domains.filter((d) => d.clientId === clientId);
   },
 
   // FILES & DOCUMENTS (Strictly scoped by clientId)
@@ -1300,41 +1232,27 @@ export const portalDb = {
     return ticket;
   },
 
-  createSupportTicket(clientId: string, data: { subject: string; category: ClientSupportTicket['category']; priority: ClientSupportTicket['priority']; message: string }): ClientSupportTicket {
+  async createSupportTicket(clientId: string, data: { subject: string; category: ClientSupportTicket['category']; priority: ClientSupportTicket['priority']; message: string }): Promise<ClientSupportTicket> {
     const db = loadDatabase();
     const client = db.clients.find((c) => c.id === clientId);
     if (!client) throw new Error('Client not found');
 
-    const ticketNumber = `TICK-${100 + db.supportTickets.length + 1}`;
-    const newTicket: ClientSupportTicket = {
-      id: `tick_${Date.now()}`,
-      clientId,
-      ticketNumber,
-      subject: data.subject,
-      category: data.category,
-      priority: data.priority,
-      status: 'Open',
-      assignedStaff: 'Codex Dynamics Operations',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      messages: [
-        {
-          id: `msg_${Date.now()}`,
-          sender: 'client',
-          senderName: client.name,
-          text: data.message,
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    };
-
+    const response = await fetch('/api/portal/ticket', {
+      method: 'POST',
+      headers: portalAuthorizationHeaders(),
+      body: JSON.stringify({ clientId, ...data, senderName: client.name }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok || !result.ticket) {
+      throw new Error(result.error || `Could not create support ticket (${response.status}).`);
+    }
+    const newTicket = fromApiRow(result.ticket) as ClientSupportTicket;
     db.supportTickets.unshift(newTicket);
     saveDatabase(db);
-    this.logAudit(clientId, client.name, 'TICKET_CREATED', `Created support ticket ${ticketNumber}: "${data.subject}"`);
     return newTicket;
   },
 
-  addSupportTicketReply(clientId: string, ticketId: string, text: string): SupportMessage {
+  async addSupportTicketReply(clientId: string, ticketId: string, text: string): Promise<SupportMessage> {
     const db = loadDatabase();
     const ticket = db.supportTickets.find((t) => t.id === ticketId);
     if (!ticket) throw new Error('Ticket not found');
@@ -1342,20 +1260,20 @@ export const portalDb = {
       throw new Error('Forbidden: You do not have permission to reply to this ticket');
     }
 
-    const client = db.clients.find((c) => c.id === clientId);
-    const newMsg: SupportMessage = {
-      id: `msg_${Date.now()}`,
-      sender: 'client',
-      senderName: client?.name || 'Client',
-      text,
-      createdAt: new Date().toISOString(),
-    };
-
-    ticket.messages.push(newMsg);
+    const response = await fetch('/api/portal/ticket', {
+      method: 'POST',
+      headers: portalAuthorizationHeaders(),
+      body: JSON.stringify({ clientId, ticketId, text }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok || !Array.isArray(result.messages)) {
+      throw new Error(result.error || `Could not send support reply (${response.status}).`);
+    }
+    ticket.messages = result.messages.map(fromApiRow);
     ticket.updatedAt = new Date().toISOString();
-    ticket.status = ticket.status === 'Resolved' || ticket.status === 'Closed' ? 'Open' : ticket.status;
+    ticket.status = 'Open';
     saveDatabase(db);
-    this.logAudit(clientId, client?.name || 'Client', 'TICKET_REPLIED', `Sent reply on ticket ${ticket.ticketNumber}`);
+    const newMsg = ticket.messages[ticket.messages.length - 1];
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('cdx_chat_message_received', { detail: { clientId, message: newMsg } }));
@@ -1397,7 +1315,14 @@ export const portalDb = {
     }
   },
 
-  markAllNotificationsRead(clientId: string): void {
+  async markAllNotificationsRead(clientId: string): Promise<void> {
+    const response = await fetch('/api/client/notifications', {
+      method: 'POST',
+      headers: portalAuthorizationHeaders(),
+      body: JSON.stringify({ action: 'mark_all_read' }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || `Could not update notifications (${response.status}).`);
     const db = loadDatabase();
     db.notifications.forEach((n) => {
       if (n.clientId === clientId) n.read = true;

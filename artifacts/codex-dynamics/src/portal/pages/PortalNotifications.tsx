@@ -9,34 +9,16 @@ interface PortalNotificationsProps {
 
 export function PortalNotifications({ client, onNavigate }: PortalNotificationsProps) {
   const [notifications, setNotifications] = useState<ClientNotification[]>(() => portalDb.getNotifications(client.id));
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     const handleUpdate = () => {
       setNotifications(portalDb.getNotifications(client.id));
     };
 
-    // Initial server fetch to sync any notifications sent via API backend
-    fetch(`/api/client/notifications?user_id=${encodeURIComponent(client.id)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data?.ok && Array.isArray(data.notifications) && data.notifications.length > 0) {
-          const currentLocal = portalDb.getNotifications(client.id);
-          const currentTitles = new Set(currentLocal.map((n) => `${n.title}_${n.description}`));
-          for (const item of data.notifications) {
-            const key = `${item.title}_${item.description}`;
-            if (!currentTitles.has(key)) {
-              portalDb.addNotification(item.user_id || client.id, {
-                title: item.title,
-                description: item.description,
-                kind: item.kind,
-                link: item.link,
-              });
-            }
-          }
-          setNotifications(portalDb.getNotifications(client.id));
-        }
-      })
-      .catch(() => {});
+    portalDb.syncWithServer(client.id)
+      .then(handleUpdate)
+      .catch((error) => setLoadError(error instanceof Error ? error.message : 'Could not load notifications.'));
 
     window.addEventListener('cdx_portal_notification_added', handleUpdate);
     window.addEventListener('storage', handleUpdate);
@@ -46,9 +28,14 @@ export function PortalNotifications({ client, onNavigate }: PortalNotificationsP
     };
   }, [client.id]);
 
-  const handleMarkAllRead = () => {
-    portalDb.markAllNotificationsRead(client.id);
-    setNotifications(portalDb.getNotifications(client.id));
+  const handleMarkAllRead = async () => {
+    setLoadError('');
+    try {
+      await portalDb.markAllNotificationsRead(client.id);
+      setNotifications(portalDb.getNotifications(client.id));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not update notifications.');
+    }
   };
 
   const getIcon = (type: string) => {
@@ -91,6 +78,12 @@ export function PortalNotifications({ client, onNavigate }: PortalNotificationsP
           </button>
         )}
       </div>
+
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {loadError}
+        </div>
+      )}
 
       {notifications.length === 0 ? (
         <div className="p-16 text-center bg-white dark:bg-[#1C1C1E] border border-dashed border-black/[0.08] dark:border-white/[0.1] rounded-3xl">

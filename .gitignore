@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+/artifacts/codex-dynamics/data/
+/artifacts/codex-dynamics/public/api/data/*.sqlite
+/artifacts/codex-dynamics/public/api/data/*.sqlite3

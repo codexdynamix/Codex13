@@ -121,33 +121,19 @@ export function ContactModal({ isOpen, onClose, defaultService }: ContactModalPr
         source: "website_contact_modal",
       };
 
-      // Codex Dynamics CRM owns the shared site lead/enquiry record.
-      await fetch("/api/crm/leads", {
+      const response = await fetch("/api/crm/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, kind: "enquiry" }),
-      }).then((response) => {
-        if (!response.ok) throw new Error("Lead capture failed");
       });
-
-      // 2. Persist locally for resilient offline access
-      try {
-        const raw = localStorage.getItem("codex-inquiries");
-        const list = raw ? JSON.parse(raw) : [];
-        list.push({ ...payload, status: "new", at: new Date().toISOString(), created_at: new Date().toISOString() });
-        localStorage.setItem("codex-inquiries", JSON.stringify(list));
-        window.dispatchEvent(new Event("storage"));
-        window.dispatchEvent(new CustomEvent("codex_inquiry_added", { detail: payload }));
-      } catch {
-        // ignore quota
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        throw new Error(result.error || "We couldn't send your inquiry. Please try again.");
       }
-
-      // 3. Fallback or notification
       setIsSuccess(true);
       toast.success("Inquiry received! We'll reply shortly.");
-    } catch {
-      setIsSuccess(true);
-      toast.success("Inquiry received!");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "We couldn't send your inquiry. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
