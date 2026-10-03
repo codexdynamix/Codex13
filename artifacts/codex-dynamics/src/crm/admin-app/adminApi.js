@@ -610,6 +610,13 @@ export async function getAdminAccountingOverview() {
   return adminFetch('/api/admin/accounting/overview');
 }
 
+export async function saveClientInvoiceFollowup(clientId, followup) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/followups`, {
+    method: 'POST',
+    body: followup,
+  });
+}
+
 export async function voidClientAccountingPayment(clientId, paymentId, reason) {
   return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/payments/${encodeURIComponent(paymentId)}/void`, {
     method: 'POST',

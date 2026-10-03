@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, CircleAlert, Clock3, CreditCard, Download, FileSpreadsheet, FileText, Layers3, ListChecks, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, CircleAlert, Clock3, CreditCard, Download, FileSpreadsheet, FileText, Layers3, ListChecks, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { getAdminAccountingOverview, invoiceDueRecurringServices } from '../adminApi.js';
 import ClientAccountingPanel from './ClientAccountingPanel.jsx';
+import InvoiceFollowupForm from './InvoiceFollowupForm.jsx';
 import './accounting-workspace.css';
 
-const emptyOverview = { clients: [], invoices: [], payments: [], recurringServices: [], hosting: [], domains: [] };
+const emptyOverview = { clients: [], invoices: [], payments: [], recurringServices: [], hosting: [], domains: [], followups: [] };
 const asNumber = (value) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
@@ -20,6 +21,7 @@ const normalizeOverview = (payload) => ({
   recurringServices: asArray(payload?.recurringServices).map((row) => ({ ...row, amount: asNumber(row.amount) })),
   hosting: asArray(payload?.hosting).map((row) => ({ ...row, amount: asNumber(row.amount), currency: row.currency || 'USD' })),
   domains: asArray(payload?.domains).map((row) => ({ ...row, renewal_amount: row.renewal_amount == null || row.renewal_amount === '' ? null : asNumber(row.renewal_amount), currency: row.currency || 'USD' })),
+  followups: asArray(payload?.followups),
 });
 const currencyLabel = (amount, currency) => {
   try {
@@ -141,6 +143,7 @@ export default function AccountingWorkspace({ showNotification }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [clientSort, setClientSort] = useState('name');
   const [view, setView] = useState('overview');
   const [statusFilter, setStatusFilter] = useState('all');
   const [recordKindFilter, setRecordKindFilter] = useState('all');
@@ -154,7 +157,13 @@ export default function AccountingWorkspace({ showNotification }) {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
   const [activeClient, setActiveClient] = useState(null);
+  const [activeClientMode, setActiveClientMode] = useState('');
+  const [globalActionMode, setGlobalActionMode] = useState('');
+  const [globalActionClientId, setGlobalActionClientId] = useState('');
+  const [followupTarget, setFollowupTarget] = useState(null);
   const closeButtonRef = useRef(null);
+  const globalActionCloseRef = useRef(null);
+  const followupCloseRef = useRef(null);
   const previousFocusRef = useRef(null);
 
   const refreshOverview = useCallback(async ({ silent = false } = {}) => {
@@ -184,7 +193,10 @@ export default function AccountingWorkspace({ showNotification }) {
   useEffect(() => {
     if (!activeClient) return undefined;
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') setActiveClient(null);
+      if (event.key === 'Escape') {
+        setActiveClient(null);
+        setActiveClientMode('');
+      }
       if (event.key === 'Tab') {
         const dialog = document.querySelector('.aw-drawer');
         const focusable = dialog?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex="0"]');
@@ -202,6 +214,50 @@ export default function AccountingWorkspace({ showNotification }) {
       previousFocusRef.current?.focus?.();
     };
   }, [activeClient]);
+
+  useEffect(() => {
+    if (!globalActionMode) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setGlobalActionMode('');
+      if (event.key === 'Tab') {
+        const dialog = document.querySelector('.aw-client-picker');
+        const focusable = dialog?.querySelectorAll('button:not([disabled]), select:not([disabled])');
+        if (!focusable?.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    globalActionCloseRef.current?.focus();
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
+  }, [globalActionMode]);
+
+  useEffect(() => {
+    if (!followupTarget) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setFollowupTarget(null);
+      if (event.key === 'Tab') {
+        const dialog = document.querySelector('.aw-followup-dialog');
+        const focusable = dialog?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
+        if (!focusable?.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    followupCloseRef.current?.focus();
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
+  }, [followupTarget]);
 
   const monthDate = useMemo(() => {
     const [year, month] = selectedMonth.split('-').map(Number);
@@ -240,10 +296,43 @@ export default function AccountingWorkspace({ showNotification }) {
   const query = search.trim().toLowerCase();
   const matchingClients = useMemo(() => overview.clients.filter((client) => {
     if (!query) return true;
-    return [client.name, client.company, client.email].some((value) => String(value || '').toLowerCase().includes(query));
+    return [client.name, client.company, client.email, client.phone].some((value) => String(value || '').toLowerCase().includes(query));
   }), [overview.clients, query]);
   const clientById = useMemo(() => new Map(overview.clients.map((client) => [String(client.id), client])), [overview.clients]);
   const invoiceById = useMemo(() => new Map(overview.invoices.map((invoice) => [String(invoice.id), invoice])), [overview.invoices]);
+  const latestFollowupByInvoice = useMemo(() => {
+    const latest = new Map();
+    for (const followup of overview.followups) {
+      if (!latest.has(String(followup.invoice_id))) latest.set(String(followup.invoice_id), followup);
+    }
+    return latest;
+  }, [overview.followups]);
+  const clientRows = useMemo(() => {
+    const invoicesByClient = new Map();
+    for (const invoice of overview.invoices) {
+      const key = String(invoice.client_id);
+      if (!invoicesByClient.has(key)) invoicesByClient.set(key, []);
+      invoicesByClient.get(key).push(invoice);
+    }
+    const servicesByClient = new Map();
+    for (const service of overview.recurringServices) {
+      const key = String(service.client_id);
+      if (!servicesByClient.has(key)) servicesByClient.set(key, []);
+      servicesByClient.get(key).push(service);
+    }
+    return matchingClients.map((client) => {
+      const invoices = invoicesByClient.get(String(client.id)) || [];
+      const openInvoices = invoices.filter((row) => asNumber(row.balance_due) > 0 && String(row.status || '').toLowerCase() !== 'draft');
+      const overdueInvoices = openInvoices.filter((row) => invoiceDisplayStatus(row) === 'Overdue');
+      const clientServices = (servicesByClient.get(String(client.id)) || []).filter((row) => !['inactive', 'cancelled', 'ended'].includes(String(row.status || '').toLowerCase()));
+      return { client, openInvoices, overdueInvoices, clientServices };
+    });
+  }, [matchingClients, overview.invoices, overview.recurringServices]);
+  const sortedClientRows = useMemo(() => [...clientRows].sort((a, b) => {
+    if (clientSort === 'overdue') return b.overdueInvoices.length - a.overdueInvoices.length || String(a.client.name || a.client.company || '').localeCompare(String(b.client.name || b.client.company || ''));
+    if (clientSort === 'open') return b.openInvoices.length - a.openInvoices.length || String(a.client.name || a.client.company || '').localeCompare(String(b.client.name || b.client.company || ''));
+    return String(a.client.name || a.client.company || '').localeCompare(String(b.client.name || b.client.company || ''));
+  }), [clientRows, clientSort]);
   const accountRows = useMemo(() => {
     const entries = [
       ...monthInvoices.map((row) => {
@@ -285,7 +374,7 @@ export default function AccountingWorkspace({ showNotification }) {
       ...dueInvoices.filter((row) => hasDateKey(row.due_date) && dateKey(row.due_date) <= cutoff).map((row) => ({
         kind: 'invoice', id: row.id, clientId: row.client_id, name: clientName(row.client_id, row.client_name),
         ref: row.invoice_number || `Invoice ${row.id}`, dueDate: row.due_date,
-        amount: row.balance_due, currency: row.currency || 'USD', status: invoiceDisplayStatus(row),
+        amount: row.balance_due, currency: row.currency || 'USD', status: invoiceDisplayStatus(row), invoice: row,
       })),
       ...activeServices.filter((row) => hasDateKey(row.next_due_date) && dateKey(row.next_due_date) <= cutoff).map((row) => ({
         kind: 'recurring service', id: row.id, clientId: row.client_id, name: clientName(row.client_id, row.client_name),
@@ -312,7 +401,7 @@ export default function AccountingWorkspace({ showNotification }) {
   const pageSize = 25;
   const pageCount = Math.max(1, Math.ceil((view === 'overview' ? accountRows.length : view === 'clients' ? matchingClients.length : view === 'services' ? matchingServices.length : dueWorkRows.length) / pageSize));
   const ledgerPageRows = accountRows.slice((page - 1) * pageSize, page * pageSize);
-  const clientPageRows = matchingClients.slice((page - 1) * pageSize, page * pageSize);
+  const clientPageRows = sortedClientRows.slice((page - 1) * pageSize, page * pageSize);
   const servicePageRows = matchingServices.slice((page - 1) * pageSize, page * pageSize);
   const duePageRows = dueWorkRows.slice((page - 1) * pageSize, page * pageSize);
   const selectedBatchServices = dueRecurringServices.filter((row) => batchSelection.includes(String(row.id)));
@@ -322,14 +411,41 @@ export default function AccountingWorkspace({ showNotification }) {
     return totals;
   }, new Map());
 
-  useEffect(() => { setPage(1); }, [view, selectedMonth, search, statusFilter, recordKindFilter, clientFilter]);
-  const openClient = (client) => {
-    previousFocusRef.current = document.activeElement;
+  useEffect(() => { setPage(1); }, [view, selectedMonth, search, statusFilter, recordKindFilter, clientFilter, clientSort]);
+  const openClient = (client, mode = '', preserveReturnFocus = true) => {
+    if (preserveReturnFocus) previousFocusRef.current = document.activeElement;
+    setActiveClientMode(mode);
     setActiveClient(client);
+  };
+  const closeClient = () => {
+    setActiveClient(null);
+    setActiveClientMode('');
+  };
+  const openGlobalAction = (mode) => {
+    previousFocusRef.current = document.activeElement;
+    setGlobalActionMode(mode);
+    setGlobalActionClientId('');
+  };
+  const continueGlobalAction = (event) => {
+    event.preventDefault();
+    const client = clientById.get(String(globalActionClientId));
+    if (!client) return;
+    const mode = globalActionMode;
+    setGlobalActionMode('');
+    openClient(client, mode, false);
+  };
+  const openFollowup = (clientId, clientName, invoice) => {
+    previousFocusRef.current = document.activeElement;
+    setFollowupTarget({ clientId, clientName, invoice });
   };
   const notify = (message) => {
     showNotification?.(message);
     if (/created\.|recorded and issue|saved\./i.test(String(message || ''))) refreshOverview({ silent: true });
+  };
+  const finishFollowup = async () => {
+    setFollowupTarget(null);
+    await refreshOverview({ silent: true });
+    showNotification?.('Follow-up saved to history. No email was sent.');
   };
   const openBatchReview = (serviceIds = dueRecurringServices.map((row) => String(row.id))) => {
     setBatchSelection(serviceIds.slice(0, 100));
@@ -399,6 +515,8 @@ export default function AccountingWorkspace({ showNotification }) {
           <span data-testid="text-selected-month"><CalendarDays size={15} aria-hidden="true" />{monthTitle}</span>
           <button type="button" className="aw-icon-button" aria-label="Next month" data-testid="button-month-next" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
         </div>
+        <button type="button" className="aw-button aw-button-quiet" disabled={loading || !overview.clients.length} onClick={() => openGlobalAction('invoice')} data-testid="button-global-new-invoice"><Plus size={14} aria-hidden="true" />New invoice</button>
+        <button type="button" className="aw-button aw-button-primary" disabled={loading || !overview.clients.length} onClick={() => openGlobalAction('payment')} data-testid="button-global-record-payment"><Plus size={14} aria-hidden="true" />Record payment</button>
         <button type="button" className="aw-button aw-button-quiet" data-testid="button-refresh-accounting" onClick={() => refreshOverview()} disabled={refreshing}>
           <RefreshCw size={15} className={refreshing ? 'aw-spinning' : ''} aria-hidden="true" />{refreshing ? 'Refreshing' : 'Refresh'}
         </button>
@@ -410,12 +528,22 @@ export default function AccountingWorkspace({ showNotification }) {
       <button type="button" className="aw-button aw-button-quiet" data-testid="button-retry-accounting" onClick={() => refreshOverview()}>Try again</button>
     </div>}
 
-    <div className="aw-summary-row" aria-label={`${monthTitle} accounting summary`}>
-      <Metric label="Invoices issued" icon={FileText} rows={monthIssuedInvoices} amountKey="total" detail={`${monthIssuedInvoices.length} issued invoice${monthIssuedInvoices.length === 1 ? '' : 's'} dated this month`} variant="billed" />
-      <Metric label="Payments received" icon={ArrowDownLeft} rows={monthReceivedPayments} amountKey="amount" detail={`${monthReceivedPayments.length} valid receipt${monthReceivedPayments.length === 1 ? '' : 's'} dated this month`} variant="received" />
-      <Metric label="Open balances" icon={ArrowUpRight} rows={dueInvoices} amountKey="balance_due" detail={`${dueInvoices.length} open invoice${dueInvoices.length === 1 ? '' : 's'} across all clients`} variant="balance" />
-      <Metric label="Overdue balances" icon={CircleAlert} rows={overdueInvoices} amountKey="balance_due" detail={`${overdueInvoices.length} past-due invoice${overdueInvoices.length === 1 ? '' : 's'}`} variant="overdue" />
-      <Metric label="Monthly service equivalent" icon={Layers3} rows={monthlyEquivalentServices} amountKey="amount" detail={`${activeServices.length} schedules plus priced hosting and domains · ${monthServices.length} schedules due in ${monthTitle}; yearly fees divided by 12`} variant="service" />
+    <div className="aw-metric-groups">
+      <section className="aw-metric-group aw-metric-period" aria-label={`${monthTitle} activity totals`}>
+        <div className="aw-metric-group-heading"><h2>Selected-month activity</h2><span>{monthTitle} · by accounting date</span></div>
+        <div className="aw-summary-row">
+          <Metric label="Invoices issued" icon={FileText} rows={monthIssuedInvoices} amountKey="total" detail={`${monthIssuedInvoices.length} issued invoice${monthIssuedInvoices.length === 1 ? '' : 's'} dated in ${monthTitle}`} variant="billed" />
+          <Metric label="Payments received" icon={ArrowDownLeft} rows={monthReceivedPayments} amountKey="amount" detail={`${monthReceivedPayments.length} valid receipt${monthReceivedPayments.length === 1 ? '' : 's'} dated in ${monthTitle}`} variant="received" />
+        </div>
+      </section>
+      <section className="aw-metric-group aw-metric-current" aria-label="Current portfolio totals">
+        <div className="aw-metric-group-heading"><h2>Current portfolio</h2><span>All clients · open balances and active services</span></div>
+        <div className="aw-summary-row">
+          <Metric label="Open balances" icon={ArrowUpRight} rows={dueInvoices} amountKey="balance_due" detail={`${dueInvoices.length} open invoice${dueInvoices.length === 1 ? '' : 's'} across all clients`} variant="balance" />
+          <Metric label="Overdue balances" icon={CircleAlert} rows={overdueInvoices} amountKey="balance_due" detail={`${overdueInvoices.length} past-due invoice${overdueInvoices.length === 1 ? '' : 's'}`} variant="overdue" />
+          <Metric label="Monthly service equivalent" icon={Layers3} rows={monthlyEquivalentServices} amountKey="amount" detail={`${activeServices.length} schedules plus priced hosting and domains · ${monthServices.length} schedules due in ${monthTitle}; yearly fees divided by 12`} variant="service" />
+        </div>
+      </section>
     </div>
 
     <div className="aw-workbench">
@@ -425,10 +553,11 @@ export default function AccountingWorkspace({ showNotification }) {
             <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? 'is-active' : ''} data-testid={`tab-accounting-${key}`} onClick={() => setView(key)}>{label}<span>{key === 'overview' ? accountRows.length : key === 'due' ? dueWorkRows.length : key === 'clients' ? matchingClients.length : activeServices.length}</span></button>
           )}
         </div>
-        <label className="aw-search">
+        {view !== 'clients' && <label className="aw-search">
           <Search size={15} aria-hidden="true" />
-          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === 'clients' ? 'Find a client' : 'Search this view'} aria-label="Search accounting records" data-testid="input-accounting-search" />
-        </label>
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search this view" aria-label="Search accounting records" data-testid="input-accounting-search" />
+          {search && <button type="button" className="aw-search-clear" aria-label="Clear search" onClick={() => setSearch('')} data-testid="button-clear-accounting-search"><X size={14} aria-hidden="true" /></button>}
+        </label>}
       </div>
 
       {view === 'overview' && <div className="aw-panel">
@@ -479,7 +608,7 @@ export default function AccountingWorkspace({ showNotification }) {
             <ListChecks size={15} aria-hidden="true" />Review recurring batch ({dueRecurringServices.length})
           </button>}
         </div>
-        {loading ? <LedgerSkeleton /> : dueWorkRows.length ? <div className="aw-table-wrap">
+        {loading ? <LedgerSkeleton /> : dueWorkRows.length ? <div className="aw-table-wrap" role="region" tabIndex="0" aria-label="Due work table; scroll horizontally to review columns">
           <table className="aw-table aw-due-table">
             <thead><tr><th scope="col">Due date</th><th scope="col">Work item</th><th scope="col">Client</th><th scope="col">Status</th><th scope="col" className="aw-align-right">Amount</th><th scope="col" className="aw-action-column"><span className="aw-visually-hidden">Action</span></th></tr></thead>
             <tbody>{duePageRows.map((row) => <tr key={`${row.kind}-${row.id}`} data-testid={`row-due-work-${row.kind.replace(/\s+/g, '-')}-${row.id}`}>
@@ -494,6 +623,8 @@ export default function AccountingWorkspace({ showNotification }) {
                 {row.kind === 'recurring service' && row.billable && <label className="aw-batch-select"><input type="checkbox" checked={batchSelection.includes(String(row.id))} onChange={() => toggleBatchService(row.id)} aria-label={`Select ${row.ref} for batch invoicing`} data-testid={`checkbox-batch-service-${row.id}`} /><span className="aw-visually-hidden">Select for invoicing</span></label>}
                 {row.kind === 'recurring service' && row.billable
                   ? <button type="button" className="aw-row-action" onClick={() => openBatchReview([String(row.id)])} data-testid={`button-review-recurring-invoice-${row.id}`}>Review invoice</button>
+                  : row.kind === 'invoice' && row.status === 'Overdue'
+                    ? <button type="button" className="aw-row-action" onClick={() => openFollowup(row.clientId, row.name, row.invoice)} data-testid={`button-log-due-followup-${row.id}`}>Log follow-up</button>
                   : <button type="button" className="aw-row-action" onClick={() => openClient(clientById.get(String(row.clientId)) || { id: row.clientId, name: row.name })} data-testid={`button-open-due-ledger-${row.id}`}>Open ledger</button>}
               </td>
             </tr>)}</tbody>
@@ -501,30 +632,65 @@ export default function AccountingWorkspace({ showNotification }) {
         </div> : <EmptyState title="No upcoming accounting work" detail="Open invoice balances, recurring services, and priced asset renewals will appear here when they are due within 30 days." />}
         {!loading && dueWorkRows.length > pageSize && <Pagination page={page} pageCount={pageCount} onPage={setPage} itemCount={dueWorkRows.length} />}
         {dueRecurringServices.length > 0 && <div className="aw-schedule-note"><Clock3 size={15} aria-hidden="true" /><span>Recurring invoices are created only after review and confirmation. A batch is all-or-nothing if any selected schedule has changed.</span></div>}
+        <section className="aw-recent-followups" aria-label="Recent invoice follow-up history">
+          <div className="aw-followup-history-heading"><div><h3>Recent follow-up history</h3><p>Saved contact notes only; no messages are sent from this history.</p></div><span>{overview.followups.length} logged</span></div>
+          {loading ? <p className="aw-followup-empty">Loading follow-up history…</p> : overview.followups.length === 0
+            ? <p className="aw-followup-empty">No follow-ups logged yet. Use “Log follow-up” on an overdue invoice to add the first record.</p>
+            : <div className="aw-recent-followup-list">{overview.followups.slice(0, 6).map((item) => <article className="aw-recent-followup" key={item.id} data-testid={`row-recent-followup-${item.id}`}>
+              <span className="aw-recent-followup-date">{dateLabel(item.contact_date)}</span>
+              <div className="aw-recent-followup-main"><strong>{item.client_name || 'Client'} · {item.invoice_number || 'Invoice'}</strong>
+                <span>{({ email: 'Email contact (logged only)', phone: 'Phone call', meeting: 'Meeting', other: 'Other' })[item.contact_method] || 'Contact'}</span>
+                <p>{item.note}</p>
+                {item.next_follow_up_date && <small>Next follow-up · {dateLabel(item.next_follow_up_date)}</small>}
+              </div>
+              <button type="button" className="aw-row-action" onClick={() => openClient(clientById.get(String(item.client_id)) || { id: item.client_id, name: item.client_name || 'Client' })} data-testid={`button-open-followup-client-${item.id}`}>Open ledger</button>
+            </article>)}</div>}
+        </section>
       </div>}
 
       {view === 'clients' && <div className="aw-panel">
-        <div className="aw-section-heading"><div><h2>Client accounts</h2><p>Open a shared ledger to review and record client accounting.</p></div><span className="aw-count-label" data-testid="text-client-count">{matchingClients.length} clients</span></div>
-        {loading ? <LedgerSkeleton /> : matchingClients.length ? <div className="aw-client-grid">
-          {clientPageRows.map((client) => {
-            const invoices = overview.invoices.filter((row) => String(row.client_id) === String(client.id));
-            const openInvoices = invoices.filter((row) => asNumber(row.balance_due) > 0 && String(row.status || '').toLowerCase() !== 'draft');
-            const clientServices = overview.recurringServices.filter((row) => String(row.client_id) === String(client.id)
-              && !['inactive', 'cancelled', 'ended'].includes(String(row.status || '').toLowerCase()));
-            return <article className="aw-client-card" key={client.id} data-testid={`card-client-${client.id}`}>
+        <div className="aw-section-heading"><div><h2>Client accounts</h2><p>Open a shared ledger to review and record client accounting.</p></div><span className="aw-count-label" data-testid="text-client-count">{matchingClients.length} matching clients</span></div>
+        <div className="aw-client-tools">
+          <label className="aw-search aw-client-search">
+            <Search size={15} aria-hidden="true" />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, company, email, or phone" aria-label="Search clients by name, company, email, or phone" data-testid="input-client-search" />
+            {search && <button type="button" className="aw-search-clear" aria-label="Clear client search" onClick={() => setSearch('')} data-testid="button-clear-client-search"><X size={14} aria-hidden="true" /></button>}
+          </label>
+          <label className="aw-client-sort"><span>Sort</span><select value={clientSort} onChange={(event) => setClientSort(event.target.value)} aria-label="Sort client accounts" data-testid="select-client-sort">
+            <option value="name">Name A–Z</option><option value="overdue">Most overdue</option><option value="open">Most open invoices</option>
+          </select></label>
+          <span className="aw-client-results" data-testid="text-client-results">{matchingClients.length} result{matchingClients.length === 1 ? '' : 's'}</span>
+        </div>
+        {loading ? <LedgerSkeleton /> : matchingClients.length ? <>
+          <div className="aw-client-table-wrap" role="region" tabIndex="0" aria-label="Client accounts table">
+            <table className="aw-client-table">
+              <thead><tr><th scope="col">Client</th><th scope="col">Contact</th><th scope="col">Status</th><th scope="col" className="aw-align-right">Open balance</th><th scope="col" className="aw-align-right">Open</th><th scope="col" className="aw-align-right">Overdue</th><th scope="col" className="aw-align-right">Schedules</th><th scope="col" className="aw-client-action-heading">Action</th></tr></thead>
+              <tbody>{clientPageRows.map(({ client, openInvoices, overdueInvoices, clientServices }) => <tr key={client.id} data-testid={`row-client-${client.id}`}>
+                <td><div className="aw-client-table-identity"><span className="aw-client-monogram" aria-hidden="true">{(client.name || client.company || 'C').trim().slice(0, 1).toUpperCase()}</span><span><strong data-testid={`text-client-name-${client.id}`}>{client.name || client.company || 'Unnamed client'}</strong><small>{client.company && client.company !== client.name ? client.company : 'Client account'}</small></span></div></td>
+                <td className="aw-client-table-contact"><span>{client.email || 'No email on file'}</span>{client.phone && <small>{client.phone}</small>}</td>
+                <td><StatusBadge value={client.status} testId={`status-client-${client.id}`} /></td>
+                <td className="aw-align-right"><CurrencyAmounts rows={openInvoices} amountKey="balance_due" className="aw-client-currency" /></td>
+                <td className="aw-align-right">{openInvoices.length}</td><td className="aw-align-right">{overdueInvoices.length}</td><td className="aw-align-right">{clientServices.length}</td>
+                <td className="aw-client-action-cell"><button type="button" className="aw-row-action" data-testid={`button-manage-client-${client.id}`} onClick={() => openClient(client)}>Open ledger</button></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+          <div className="aw-client-grid">
+            {clientPageRows.map(({ client, openInvoices, overdueInvoices, clientServices }) => <article className="aw-client-card" key={client.id} data-testid={`card-client-mobile-${client.id}`}>
               <div className="aw-client-card-head"><span className="aw-client-monogram" aria-hidden="true">{(client.name || client.company || 'C').trim().slice(0, 1).toUpperCase()}</span>
-                <div className="aw-client-identity"><strong data-testid={`text-client-name-${client.id}`}>{client.name || client.company || 'Unnamed client'}</strong><span data-testid={`text-client-contact-${client.id}`}>{client.company && client.company !== client.name ? client.company : (client.email || 'No email on file')}</span></div>
-                <StatusBadge value={client.status} testId={`status-client-${client.id}`} />
+                <div className="aw-client-identity"><strong data-testid={`text-client-name-mobile-${client.id}`}>{client.name || client.company || 'Unnamed client'}</strong><span data-testid={`text-client-contact-mobile-${client.id}`}>{client.company && client.company !== client.name ? client.company : (client.email || 'No email on file')}</span>{client.phone && <small>{client.phone}</small>}</div>
+                <StatusBadge value={client.status} testId={`status-client-mobile-${client.id}`} />
               </div>
               <div className="aw-client-facts">
                 <span className="aw-client-balance"><small>Open balance</small><CurrencyAmounts rows={openInvoices} amountKey="balance_due" className="aw-client-currency" /></span>
                 <span><small>Open invoices</small><strong>{openInvoices.length}</strong></span>
+                <span><small>Overdue</small><strong>{overdueInvoices.length}</strong></span>
                 <span><small>Active schedules</small><strong>{clientServices.length}</strong></span>
               </div>
-              <button type="button" className="aw-button aw-button-open" data-testid={`button-manage-client-${client.id}`} onClick={() => openClient(client)}>Manage ledger <ChevronRight size={15} aria-hidden="true" /></button>
-            </article>;
-          })}
-        </div> : <EmptyState title={query ? 'No clients found' : 'No client accounts yet'} detail={query ? 'Try a different name, company, or email.' : 'Client accounting records will appear here when available.'} />}
+              <button type="button" className="aw-button aw-button-open" data-testid={`button-manage-client-mobile-${client.id}`} onClick={() => openClient(client)}>Manage ledger <ChevronRight size={15} aria-hidden="true" /></button>
+            </article>)}
+          </div>
+        </> : <EmptyState title={query ? 'No clients found' : 'No client accounts yet'} detail={query ? 'Try a different name, company, email, or phone number.' : 'Client accounting records will appear here when available.'} />}
         {!loading && matchingClients.length > pageSize && <Pagination page={page} pageCount={pageCount} onPage={setPage} itemCount={matchingClients.length} />}
       </div>}
 
@@ -552,6 +718,26 @@ export default function AccountingWorkspace({ showNotification }) {
     </div>
 
     <footer className="aw-footer" data-testid="text-accounting-data-note"><span>Ledger source: recorded invoices and payments</span><span>Amounts remain grouped by currency</span></footer>
+
+    {globalActionMode && <div className="aw-modal-backdrop aw-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setGlobalActionMode(''); }}>
+      <section className="aw-client-picker" role="dialog" aria-modal="true" aria-labelledby="aw-client-picker-title" data-testid="dialog-accounting-action-client">
+        <header className="aw-client-picker-header">
+          <div><span className="aw-drawer-kicker">ACCOUNTING ENTRY</span><h2 id="aw-client-picker-title">{globalActionMode === 'invoice' ? 'Choose a client for the invoice' : 'Choose a client for the payment'}</h2></div>
+          <button ref={globalActionCloseRef} type="button" className="aw-icon-button aw-close-button" aria-label="Close client selector" onClick={() => setGlobalActionMode('')} data-testid="button-close-accounting-client-picker"><X size={18} /></button>
+        </header>
+        <p className="aw-picker-intro">You’ll review and save the entry in the client ledger. This does not send a message or charge a client.</p>
+        <form onSubmit={continueGlobalAction}>
+          <label>Client account<select required value={globalActionClientId} onChange={(event) => setGlobalActionClientId(event.target.value)} data-testid="select-global-action-client">
+            <option value="">Select a client</option>
+            {[...overview.clients].sort((a, b) => String(a.name || a.company || '').localeCompare(String(b.name || b.company || ''))).map((client) => <option key={client.id} value={String(client.id)}>{client.name || client.company || 'Unnamed client'}{client.company && client.name && client.company !== client.name ? ` · ${client.company}` : ''}</option>)}
+          </select></label>
+          <div className="aw-picker-actions">
+            <button type="button" className="aw-button aw-button-quiet" onClick={() => setGlobalActionMode('')}>Cancel</button>
+            <button type="submit" className="aw-button aw-button-primary" disabled={!globalActionClientId} data-testid="button-continue-global-accounting-action">Continue to {globalActionMode === 'invoice' ? 'invoice' : 'payment'} entry</button>
+          </div>
+        </form>
+      </section>
+    </div>}
 
     {batchReviewOpen && <div className="aw-modal-backdrop aw-batch-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !batchBusy) setBatchReviewOpen(false); }}>
       <section className="aw-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="aw-batch-title" data-testid="dialog-recurring-batch-review">
@@ -582,12 +768,21 @@ export default function AccountingWorkspace({ showNotification }) {
       </section>
     </div>}
 
-    {activeClient && <div className="aw-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveClient(null); }}>
-      <section className="aw-drawer" role="dialog" aria-modal="true" aria-labelledby="aw-drawer-title" data-testid="dialog-client-accounting">
-        <header className="aw-drawer-header"><div><span className="aw-drawer-kicker">CLIENT LEDGER</span><h2 id="aw-drawer-title">{activeClient.name || activeClient.company || 'Client accounting'}</h2>{activeClient.email && <p>{activeClient.email}</p>}</div>
-          <button ref={closeButtonRef} type="button" className="aw-icon-button aw-close-button" aria-label="Close client ledger" data-testid="button-close-client-ledger" onClick={() => setActiveClient(null)}><X size={18} /></button>
+    {followupTarget && <div className="aw-modal-backdrop aw-followup-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setFollowupTarget(null); }}>
+      <section className="aw-followup-dialog" role="dialog" aria-modal="true" aria-labelledby="aw-followup-dialog-title" data-testid="dialog-invoice-followup">
+        <header className="aw-followup-dialog-header"><div><span className="aw-drawer-kicker">INTERNAL FOLLOW-UP</span><h2 id="aw-followup-dialog-title">Log invoice follow-up</h2></div>
+          <button ref={followupCloseRef} type="button" className="aw-icon-button aw-close-button" aria-label="Close follow-up form" onClick={() => setFollowupTarget(null)} data-testid="button-close-followup-form"><X size={18} /></button>
         </header>
-        <div className="aw-drawer-content"><ClientAccountingPanel clientId={activeClient.id} showNotification={notify} canEdit onSaved={() => refreshOverview({ silent: true })} /></div>
+        <InvoiceFollowupForm clientId={followupTarget.clientId} clientName={followupTarget.clientName} invoice={followupTarget.invoice} onCancel={() => setFollowupTarget(null)} onSaved={finishFollowup} />
+      </section>
+    </div>}
+
+    {activeClient && <div className="aw-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeClient(); }}>
+      <section className="aw-drawer" role="dialog" aria-modal="true" aria-labelledby="aw-drawer-title" data-testid="dialog-client-accounting">
+        <header className="aw-drawer-header"><div><span className="aw-drawer-kicker">CLIENT LEDGER</span><h2 id="aw-drawer-title">{activeClient.name || activeClient.company || 'Client accounting'}</h2>{activeClient.email && <p>{activeClient.email}</p>}{activeClient.phone && <p>{activeClient.phone}</p>}</div>
+          <button ref={closeButtonRef} type="button" className="aw-icon-button aw-close-button" aria-label="Close client ledger" data-testid="button-close-client-ledger" onClick={closeClient}><X size={18} /></button>
+        </header>
+        <div className="aw-drawer-content"><ClientAccountingPanel clientId={activeClient.id} clientName={activeClient.name || activeClient.company || 'Client'} initialMode={activeClientMode} showNotification={notify} canEdit onSaved={() => refreshOverview({ silent: true })} /></div>
       </section>
     </div>}
   </section>;

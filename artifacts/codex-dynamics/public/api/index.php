@@ -1694,12 +1694,12 @@ if ($apiPath === '/admin/accounting/overview') {
     requireSuperAdmin($pdo, $adminSession);
 
     $clientMap = [];
-    foreach ($pdo->query("SELECT id, name, company, email, status, portal_enabled FROM portal_clients")->fetchAll() as $client) {
+    foreach ($pdo->query("SELECT id, name, company, email, phone, status, portal_enabled FROM portal_clients")->fetchAll() as $client) {
         $client['name'] = trim((string)($client['name'] ?? '')) ?: (trim((string)($client['company'] ?? '')) ?: 'Client');
         $client['source'] = 'portal';
         $clientMap[(string)$client['id']] = $client;
     }
-    foreach ($pdo->query("SELECT id, first_name, last_name, name, company, email, status FROM leads WHERE deleted_at IS NULL")->fetchAll() as $leadClient) {
+    foreach ($pdo->query("SELECT id, first_name, last_name, name, company, email, phone, status FROM leads WHERE deleted_at IS NULL")->fetchAll() as $leadClient) {
         $id = (string)$leadClient['id'];
         if (isset($clientMap[$id])) continue;
         $fullName = trim((string)($leadClient['first_name'] ?? '') . ' ' . (string)($leadClient['last_name'] ?? ''));
@@ -1742,6 +1742,18 @@ if ($apiPath === '/admin/accounting/overview') {
     ")->fetchAll();
     $hosting = $pdo->query('SELECT * FROM client_hosting ORDER BY renewal_date ASC')->fetchAll();
     $domains = $pdo->query('SELECT * FROM client_domains ORDER BY expiration_date ASC')->fetchAll();
+    $followups = $pdo->query("
+        SELECT f.*, i.invoice_number,
+               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
+               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email,
+               su.name AS staff_name
+        FROM client_invoice_followups f
+        LEFT JOIN client_invoices i ON i.id = f.invoice_id
+        LEFT JOIN portal_clients pc ON pc.id = f.client_id
+        LEFT JOIN leads l ON l.id = f.client_id
+        LEFT JOIN staff_users su ON su.id = f.created_by
+        ORDER BY f.contact_date DESC, f.created_at DESC
+    ")->fetchAll();
 
     jsonResponse([
         'ok' => true,
@@ -1751,6 +1763,7 @@ if ($apiPath === '/admin/accounting/overview') {
         'recurringServices' => $recurringServices,
         'hosting' => $hosting,
         'domains' => $domains,
+        'followups' => $followups,
     ]);
 }
 
@@ -2018,6 +2031,60 @@ if ($isAccountingServiceInvoice || $isAccountingServiceResource || $isAccounting
     }
 }
 
+$accountingFollowupsMatch = [];
+if (preg_match('#^/admin/accounting/([^/]+)/followups$#', $apiPath, $accountingFollowupsMatch)) {
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $clientId = rawurldecode($accountingFollowupsMatch[1]);
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', true);
+
+    $invoiceId = trim((string)($input['invoiceId'] ?? ''));
+    $contactDate = trim((string)($input['contactDate'] ?? ''));
+    $contactMethod = trim((string)($input['contactMethod'] ?? ''));
+    $nextFollowUpDateInput = trim((string)($input['nextFollowUpDate'] ?? ''));
+    $note = trim((string)($input['note'] ?? ''));
+    $isValidFollowupDate = static function (string $value): bool {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return false;
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+        return $date !== false && $date->format('Y-m-d') === $value;
+    };
+    if ($invoiceId === '' || strlen($invoiceId) > 191
+        || !$isValidFollowupDate($contactDate)
+        || !in_array($contactMethod, ['email', 'phone', 'meeting', 'other'], true)
+        || strlen($note) < 3 || strlen($note) > 2000
+        || ($nextFollowUpDateInput !== '' && !$isValidFollowupDate($nextFollowUpDateInput))
+        || ($nextFollowUpDateInput !== '' && $nextFollowUpDateInput < $contactDate)) {
+        jsonResponse(['ok' => false, 'error' => 'Check the invoice, action date, contact method, notes, and next follow-up date.'], 422);
+    }
+
+    $invoiceStmt = $pdo->prepare('SELECT id, status, balance_due FROM client_invoices WHERE id = ? AND client_id = ?');
+    $invoiceStmt->execute([$invoiceId, $clientId]);
+    $invoice = $invoiceStmt->fetch();
+    if (!$invoice) jsonResponse(['ok' => false, 'error' => 'That invoice does not belong to this client.'], 404);
+    if (strtolower((string)$invoice['status']) === 'draft' || (float)$invoice['balance_due'] <= 0) {
+        jsonResponse(['ok' => false, 'error' => 'Follow-ups can only be logged for invoices with an open balance.'], 409);
+    }
+
+    $followupId = 'fup_' . bin2hex(random_bytes(8));
+    $createdAt = date('c');
+    $createdBy = (string)($adminSession['id'] ?? '');
+    $pdo->prepare("
+        INSERT INTO client_invoice_followups
+            (id, client_id, invoice_id, contact_date, contact_method, note, next_follow_up_date, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ")->execute([
+        $followupId,
+        $clientId,
+        $invoiceId,
+        $contactDate,
+        $contactMethod,
+        $note,
+        $nextFollowUpDateInput !== '' ? $nextFollowUpDateInput : null,
+        $createdBy,
+        $createdAt,
+    ]);
+    jsonResponse(['ok' => true, 'followupId' => $followupId]);
+}
+
 if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
     $clientId = rawurldecode($accountingMatch[1]);
     requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', $method !== 'GET');
@@ -2032,7 +2099,16 @@ if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
         $hosting->execute([$clientId]);
         $domains = $pdo->prepare('SELECT id, domain_name, registrar, expiration_date, renewal_amount, currency, renewal_status FROM client_domains WHERE client_id = ?');
         $domains->execute([$clientId]);
-        jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'recurringServices' => $recurringServices->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll()]);
+        $followups = $pdo->prepare("
+            SELECT f.*, i.invoice_number, su.name AS staff_name
+            FROM client_invoice_followups f
+            LEFT JOIN client_invoices i ON i.id = f.invoice_id
+            LEFT JOIN staff_users su ON su.id = f.created_by
+            WHERE f.client_id = ?
+            ORDER BY f.contact_date DESC, f.created_at DESC
+        ");
+        $followups->execute([$clientId]);
+        jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'recurringServices' => $recurringServices->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll(), 'followups' => $followups->fetchAll()]);
     }
     if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     $now = date('c');

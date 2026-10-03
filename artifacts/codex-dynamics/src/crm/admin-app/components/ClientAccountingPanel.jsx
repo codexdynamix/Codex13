@@ -8,6 +8,7 @@ import {
   voidClientAccountingPayment,
   updateClientRecurringService,
 } from '../adminApi.js';
+import InvoiceFollowupForm from './InvoiceFollowupForm.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const newLine = () => ({ description: '', service: 'Project creation', quantity: 1, unitPrice: 0 });
@@ -103,12 +104,12 @@ function dateInput(value, fallback) {
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString().slice(0, 10);
 }
 
-export default function ClientAccountingPanel({ clientId, showNotification, canEdit = true, onSaved }) {
-  const [records, setRecords] = useState({ invoices: [], payments: [], recurringServices: [], hosting: [], domains: [] });
+export default function ClientAccountingPanel({ clientId, clientName = '', showNotification, canEdit = true, onSaved, initialMode = '' }) {
+  const [records, setRecords] = useState({ invoices: [], payments: [], recurringServices: [], hosting: [], domains: [], followups: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState('');
+  const [mode, setMode] = useState(initialMode);
   const [currency, setCurrency] = useState('USD');
   const [items, setItems] = useState([newLine()]);
   const [taxRate, setTaxRate] = useState(0);
@@ -122,6 +123,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
   const [assetDraft, setAssetDraft] = useState({ amount: '', currency: 'USD' });
   const [voidingPayment, setVoidingPayment] = useState(null);
   const [voidReason, setVoidReason] = useState('');
+  const [followupInvoice, setFollowupInvoice] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -134,6 +136,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
         recurringServices: (result.recurringServices || []).map(normalizeRecurringService),
         hosting: result.hosting || [],
         domains: result.domains || [],
+        followups: result.followups || [],
       });
     } catch (reason) {
       setError(reason?.message || 'Could not load client accounting.');
@@ -141,7 +144,11 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [clientId]);
+  useEffect(() => {
+    setMode(initialMode || '');
+    setFollowupInvoice(null);
+    load();
+  }, [clientId, initialMode]);
 
   const totals = useMemo(() => {
     const invoices = records.invoices.filter((invoice) => invoice.currency === currency);
@@ -324,6 +331,12 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       setBusy(false);
     }
   };
+  const followupSaved = async () => {
+    setFollowupInvoice(null);
+    await load();
+    await onSaved?.();
+    showNotification?.('Follow-up saved to history. No email was sent.');
+  };
   const serviceLines = [
     ...records.hosting.map((item) => ({ id: item.id, assetType: 'hosting', name: item.website_name || item.plan || 'Hosting', type: 'Hosting', detail: `${item.provider || 'Provider'} · ${item.billing_frequency || 'Recurring'} · ${item.status || 'Active'}`, amount: Number(item.amount || 0), currency: item.currency || 'USD', due: item.renewal_date })),
     ...records.domains.map((item) => ({ id: item.id, assetType: 'domain', name: item.domain_name || 'Domain', type: 'Domain', detail: `${item.registrar || 'Registrar'} · ${item.renewal_status || 'Active'}`, amount: item.renewal_amount == null ? null : Number(item.renewal_amount), currency: item.currency || 'USD', due: item.expiration_date })),
@@ -362,6 +375,11 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
 
       {error && <div role="alert" style={{ color: '#ff716b', fontSize: 12 }}>{error}</div>}
 
+      {canEdit && followupInvoice && <div className="aw-followup-inline" data-testid="panel-followup-form">
+        <div className="aw-followup-inline-heading"><h4>Log invoice follow-up</h4><button type="button" className="aw-button aw-button-quiet" onClick={() => setFollowupInvoice(null)}>Close</button></div>
+        <InvoiceFollowupForm clientId={clientId} clientName={clientName} invoice={followupInvoice} onCancel={() => setFollowupInvoice(null)} onSaved={followupSaved} />
+      </div>}
+
       {canEdit && mode === 'invoice' && (
         <form onSubmit={createInvoice} style={{ ...panelStyle, display: 'grid', gap: 13 }}>
           <h4 style={{ margin: 0 }}>Create client invoice</h4>
@@ -396,11 +414,12 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
               <input type="date" style={{ ...inputStyle, width: 'auto' }} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 12 }}>Status
-              <select style={{ ...inputStyle, width: 'auto' }} value={invoiceStatus} onChange={(e) => setInvoiceStatus(e.target.value)}><option value="Pending">Send to client</option><option value="Draft">Keep as draft</option></select>
+              <select style={{ ...inputStyle, width: 'auto' }} value={invoiceStatus} onChange={(e) => setInvoiceStatus(e.target.value)}><option value="Pending">Pending · visible in portal</option><option value="Draft">Keep as draft</option></select>
             </label>
             <strong style={{ marginLeft: 'auto' }}>Total: {money(invoiceEstimate.total, currency)}</strong>
             <button disabled={busy} style={{ border: 0, borderRadius: 8, padding: '9px 14px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>{busy ? 'Saving…' : 'Create invoice'}</button>
           </div>
+          <p style={{ margin: 0, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Pending invoices are visible in the client portal. Creating one does not send an email or charge the client.</p>
         </form>
       )}
 
@@ -452,23 +471,42 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
 
       <div style={{ ...panelStyle, overflowX: 'auto' }}>
         <h4 style={{ margin: '0 0 12px' }}>Invoices</h4>
+        <div className="aw-ledger-mobile-hint">Swipe horizontally to review all invoice columns.</div>
         {loading ? <p style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 12 }}>Loading…</p> : records.invoices.length === 0 ? <p style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 12 }}>No invoices yet. Create one to start tracking services, amounts, and due dates.</p> : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, textAlign: 'left' }}>
-            <thead><tr>{['Invoice', 'Services', 'Issued', 'Due', 'Total', 'Paid', 'Balance', 'Status'].map((heading) => <th key={heading} style={{ padding: 9, color: 'var(--crm-text-secondary, #a1a1aa)', borderBottom: '1px solid var(--crm-border, #3b3d45)' }}>{heading}</th>)}</tr></thead>
+          <div className="aw-ledger-detail-scroll" role="region" tabIndex="0" aria-label="Client invoice records. Scroll horizontally to review all columns.">
+          <table className="aw-ledger-detail-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, textAlign: 'left' }}>
+            <thead><tr>{['Invoice', 'Services', 'Issued', 'Due', 'Total', 'Paid', 'Balance', 'Status', ...(canEdit ? ['Follow-up'] : [])].map((heading) => <th key={heading} style={{ padding: 9, color: 'var(--crm-text-secondary, #a1a1aa)', borderBottom: '1px solid var(--crm-border, #3b3d45)' }}>{heading}</th>)}</tr></thead>
             <tbody>{records.invoices.map((invoice) => (
               <tr key={invoice.id} style={{ borderBottom: '1px solid var(--crm-border, #3b3d45)' }}>
                 <td style={{ padding: 9 }}>{invoice.invoiceNumber}</td><td style={{ padding: 9 }}>{invoice.lineItems.map((item) => item.service || item.description).join(', ') || 'Agency services'}</td>
                 <td style={{ padding: 9 }}>{invoice.issueDate}</td><td style={{ padding: 9 }}>{invoice.dueDate}</td><td style={{ padding: 9 }}>{money(invoice.total, invoice.currency)}</td><td style={{ padding: 9 }}>{money(invoice.amountPaid, invoice.currency)}</td><td style={{ padding: 9 }}>{money(invoice.balanceDue, invoice.currency)}</td><td style={{ padding: 9 }}>{invoice.status}</td>
+                {canEdit && <td style={{ padding: 9 }}>{invoice.balanceDue > 0 && String(invoice.status || '').toLowerCase() !== 'draft'
+                  ? <button type="button" className="aw-row-action" onClick={() => setFollowupInvoice(invoice)} data-testid={`button-log-invoice-followup-${invoice.id}`}>Log follow-up</button>
+                  : <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)' }}>—</span>}</td>}
               </tr>
             ))}</tbody>
           </table>
+          </div>
         )}
+      </div>
+
+      <div className="aw-followup-history" style={panelStyle} data-testid="panel-followup-history">
+        <div className="aw-followup-history-heading"><div><h4>Invoice follow-up history</h4><p>Contact notes are internal records; they do not send messages.</p></div><span>{records.followups.length} logged</span></div>
+        {loading ? <p className="aw-followup-empty">Loading follow-up history…</p> : records.followups.length === 0
+          ? <p className="aw-followup-empty">No follow-ups have been logged for this client.</p>
+          : <div className="aw-followup-list">{records.followups.map((row) => <article className="aw-followup-entry" key={row.id} data-testid={`row-invoice-followup-${row.id}`}>
+            <div className="aw-followup-entry-meta"><strong>{row.invoice_number || 'Invoice'}</strong><span>{row.contact_date} · {{ email: 'Email contact (logged only)', phone: 'Phone call', meeting: 'Meeting', other: 'Other' }[row.contact_method] || 'Contact'}</span></div>
+            <p>{row.note}</p>
+            <div className="aw-followup-entry-footer"><span>{row.staff_name ? `Recorded by ${row.staff_name}` : 'Recorded by admin'}</span>{row.next_follow_up_date && <strong>Next follow-up · {row.next_follow_up_date}</strong>}</div>
+          </article>)}</div>}
       </div>
 
       <div style={{ ...panelStyle, overflowX: 'auto' }}>
         <h4 style={{ margin: '0 0 12px' }}>Payment receipts</h4>
+        <div className="aw-ledger-mobile-hint">Swipe horizontally to review all receipt columns.</div>
         {!loading && records.payments.length === 0 ? <p style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 12 }}>No payments recorded yet.</p> : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, textAlign: 'left' }}>
+          <div className="aw-ledger-detail-scroll" role="region" tabIndex="0" aria-label="Client payment receipts. Scroll horizontally to review all columns.">
+          <table className="aw-ledger-receipt-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, textAlign: 'left' }}>
             <thead><tr>{['Receipt', 'Date', 'Linked invoice', 'Method', 'Reference', 'Amount', 'Status', ...(canEdit ? ['Action'] : [])].map((heading) => <th key={heading} style={{ padding: 9, color: 'var(--crm-text-secondary, #a1a1aa)', borderBottom: '1px solid var(--crm-border, #3b3d45)' }}>{heading}</th>)}</tr></thead>
             <tbody>{records.payments.map((row) => {
               const invoice = records.invoices.find((candidate) => candidate.id === row.invoiceId);
@@ -487,6 +525,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
               </tr>;
             })}</tbody>
           </table>
+          </div>
         )}
       </div>
 

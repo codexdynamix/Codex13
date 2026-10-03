@@ -378,6 +378,26 @@ function initSchema(PDO $pdo): void {
     ensureDatabaseColumn($pdo, 'client_payments', 'voided_at', 'TEXT NULL');
 
     $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_invoice_followups (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            invoice_id TEXT NOT NULL,
+            contact_date TEXT NOT NULL,
+            contact_method TEXT NOT NULL,
+            note TEXT NOT NULL,
+            next_follow_up_date TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        );
+    ");
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_invoice_followups_client_date ON client_invoice_followups (client_id, contact_date)');
+    } else {
+        $followupIndex = $pdo->query("SHOW INDEX FROM client_invoice_followups WHERE Key_name = 'idx_invoice_followups_client_date'")->fetch();
+        if (!$followupIndex) $pdo->exec('CREATE INDEX idx_invoice_followups_client_date ON client_invoice_followups (client_id, contact_date)');
+    }
+
+    $pdo->exec("
         CREATE TABLE IF NOT EXISTS client_recurring_services (
             id VARCHAR(191) PRIMARY KEY,
             client_id VARCHAR(191) NOT NULL,
