@@ -7,6 +7,7 @@ import { setPortalSession } from '../../../services/portalAuth';
 import {
   getLeadNotificationsAsAdmin,
   getUserProfileHistoryApi,
+  adminSetClientPassword,
   updateLeadApi,
   resetLeadStatusApi,
   clearLeadCommentsApi,
@@ -152,18 +153,9 @@ export default function LeadProfileModal({
     if (!pwd || !lead?.id) return;
     setIsUpdatingPassword(true);
     try {
-      portalDb.setClientPassword(lead.id, pwd);
+      await adminSetClientPassword(lead.id, pwd);
       setLiveClientPassword(pwd);
       setNewPasswordInput('');
-
-      // Send to backend endpoint
-      await fetch(`/api/admin/users/${encodeURIComponent(lead.id)}/set-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pwd }),
-      }).catch(() => {});
-
-      await updateLeadApi(lead.id, { clientPassword: pwd }).catch(() => {});
 
       if (setData) {
         setData((prev) => ({
@@ -175,6 +167,8 @@ export default function LeadProfileModal({
       }
       setClientActivityData(portalDb.getClientActivity(lead.id));
       showNotification('Client portal password updated successfully.');
+    } catch (error) {
+      showNotification(`Failed to update client portal password: ${error?.message || 'Please try again.'}`);
     } finally {
       setIsUpdatingPassword(false);
     }

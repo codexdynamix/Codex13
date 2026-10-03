@@ -1409,6 +1409,7 @@ export async function deleteLeadStatusEntryApi(leadId, entryId) {
 export async function importLeadsApi(leads) {
   // Accept the frontend's camelCase shape and map fields the backend expects.
   const payload = leads.map((l) => ({
+    name:               l.name || '',
     first_name:         l.firstName || l.first_name || '',
     last_name:          l.lastName  || l.last_name  || '',
     email:              l.email,
@@ -1418,12 +1419,19 @@ export async function importLeadsApi(leads) {
     stage:              l.stage,
     funnel:             l.funnel,
     affiliate:          l.affiliate,
-    client_password:    l.clientPassword || l.client_password,
+    client_password:    l.clientPassword || l.client_password || l.password || '',
+    company:            l.company || '',
+    service:            l.service || '',
+    budget:             l.budget || '',
+    timeline:           l.timeline || '',
+    message:            l.message || '',
+    notes:              l.notes || '',
     assigned_office_id: l.assignedToOffice ?? l.assigned_office_id ?? null,
     assigned_team_id:   l.assignedToTeam   ?? l.assigned_team_id   ?? null,
     assigned_agent_id:  l.assignedToAgent  ?? l.assigned_agent_id  ?? null,
   }));
-  return adminFetch('/api/admin/leads/import', { method: 'POST', body: { leads: payload } });
+  const result = await adminFetch('/api/admin/leads/import', { method: 'POST', body: { leads: payload } });
+  return { ...result, leads: (result.leads || []).map(mapLeadRow) };
 }
 
 export async function bulkAssignLeadsApi(leadIds, { officeId, teamId, agentId } = {}) {
@@ -1476,11 +1484,12 @@ export async function listClientUsers({
 }
 
 export async function adminSetClientPassword(userId, newPassword) {
-  portalDb.setClientPassword(userId, newPassword);
-  return adminFetch(`/api/admin/users/${userId}/set-password`, {
+  const result = await adminFetch(`/api/admin/leads/${encodeURIComponent(userId)}/set-password`, {
     method: 'POST',
     body: { new_password: newPassword, password: newPassword, client_password: newPassword },
   });
+  portalDb.setClientPassword(userId, newPassword);
+  return result;
 }
 
 export async function getUserProfileHistoryApi(userId, { limit = 50, offset = 0 } = {}) {

@@ -237,6 +237,43 @@ function normalizeLeadRow(array $lead): array {
     return $lead;
 }
 
+function ensurePortalClientForLead(PDO $pdo, array $lead, string $plainPassword, string $now): array {
+    $email = strtolower(trim((string)($lead['email'] ?? '')));
+    $passwordHash = password_hash($plainPassword, PASSWORD_DEFAULT);
+    if ($passwordHash === false) throw new RuntimeException('Could not securely save the client password.');
+
+    $byEmail = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ? LIMIT 1');
+    $byEmail->execute([$email]);
+    $existing = $byEmail->fetch();
+    if ($existing) {
+        $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $existing['id']]);
+        return ['id' => (string)$existing['id'], 'created' => false];
+    }
+
+    $clientId = trim((string)($lead['id'] ?? ''));
+    $byId = $pdo->prepare('SELECT id FROM portal_clients WHERE id = ? LIMIT 1');
+    $byId->execute([$clientId]);
+    if ($clientId === '' || $byId->fetch()) $clientId = 'cl_' . bin2hex(random_bytes(8));
+
+    $name = trim((string)($lead['name'] ?? '')) ?: 'Client';
+    $pdo->prepare("
+        INSERT INTO portal_clients (id, name, company, email, password, phone, country, country_code, status, portal_enabled, tier, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', 1, 'Enterprise Partner', ?)
+    ")->execute([
+        $clientId,
+        $name,
+        trim((string)($lead['company'] ?? '')),
+        $email,
+        $passwordHash,
+        trim((string)($lead['phone'] ?? '')),
+        trim((string)($lead['country'] ?? 'United Kingdom')) ?: 'United Kingdom',
+        trim((string)($lead['country_code'] ?? 'GB')) ?: 'GB',
+        $now,
+    ]);
+
+    return ['id' => $clientId, 'created' => true];
+}
+
 $adminSession = null;
 $portalSession = null;
 $isAdminLogin = $apiPath === '/admin/login';
@@ -326,11 +363,12 @@ if ($apiPath === '/crm/leads') {
 $adminLeadResourceMatch = [];
 $adminLeadRestoreMatch = [];
 $isAdminLeadCollection = $apiPath === '/admin/leads';
+$isAdminLeadImport = $apiPath === '/admin/leads/import';
 $isAdminLeadSearch = $apiPath === '/admin/leads/search';
 $isAdminLeadRestore = preg_match('#^/admin/leads/([^/]+)/restore$#', $apiPath, $adminLeadRestoreMatch) === 1;
-$isAdminLeadResource = preg_match('#^/admin/leads/([^/]+)$#', $apiPath, $adminLeadResourceMatch) === 1;
+$isAdminLeadResource = !$isAdminLeadImport && preg_match('#^/admin/leads/([^/]+)$#', $apiPath, $adminLeadResourceMatch) === 1;
 
-if ($isAdminLeadCollection || $isAdminLeadSearch || $isAdminLeadRestore || $isAdminLeadResource) {
+if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdminLeadRestore || $isAdminLeadResource) {
     $adminStmt = $pdo->prepare("SELECT role, office_id, team_id, status, name FROM staff_users WHERE id = ?");
     $adminStmt->execute([$adminSession['id']]);
     $admin = $adminStmt->fetch();
@@ -416,6 +454,87 @@ if ($isAdminLeadCollection || $isAdminLeadSearch || $isAdminLeadRestore || $isAd
             'offset' => $offset,
             'has_more' => $offset + count($rows) < $total,
         ]);
+    }
+
+    if ($isAdminLeadImport && $method === 'POST') {
+        if ($admin['role'] !== 'Super Admin') {
+            jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can import leads.'], 403);
+        }
+        $rows = $input['leads'] ?? null;
+        if (!is_array($rows) || count($rows) === 0) {
+            jsonResponse(['ok' => false, 'error' => 'At least one lead is required.'], 400);
+        }
+        if (count($rows) > 5000) {
+            jsonResponse(['ok' => false, 'error' => 'Import no more than 5,000 leads at a time.'], 400);
+        }
+
+        $preparedRows = [];
+        foreach ($rows as $index => $row) {
+            if (!is_array($row)) jsonResponse(['ok' => false, 'error' => 'Invalid lead data on row ' . ($index + 1) . '.'], 400);
+            $firstName = trim((string)($row['first_name'] ?? $row['firstName'] ?? ''));
+            $lastName = trim((string)($row['last_name'] ?? $row['lastName'] ?? ''));
+            $name = trim((string)($row['name'] ?? '')) ?: trim($firstName . ' ' . $lastName);
+            $email = strtolower(trim((string)($row['email'] ?? '')));
+            if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                jsonResponse(['ok' => false, 'error' => 'Row ' . ($index + 1) . ' needs a name and a valid email address.'], 400);
+            }
+            $preparedRows[] = [
+                'id' => 'ld_' . bin2hex(random_bytes(8)),
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'name' => $name,
+                'email' => $email,
+                'phone' => trim((string)($row['phone'] ?? '')),
+                'country' => trim((string)($row['country'] ?? 'United Kingdom')) ?: 'United Kingdom',
+                'country_code' => trim((string)($row['country_code'] ?? $row['countryCode'] ?? 'GB')) ?: 'GB',
+                'stage' => trim((string)($row['stage'] ?? $row['status'] ?? 'New')) ?: 'New',
+                'funnel' => trim((string)($row['funnel'] ?? $row['service'] ?? 'General')) ?: 'General',
+                'company' => trim((string)($row['company'] ?? '')),
+                'service' => trim((string)($row['service'] ?? '')),
+                'budget' => trim((string)($row['budget'] ?? '')),
+                'timeline' => trim((string)($row['timeline'] ?? '')),
+                'message' => trim((string)($row['message'] ?? '')),
+                'notes' => trim((string)($row['notes'] ?? '')),
+                'client_password' => trim((string)($row['client_password'] ?? $row['password'] ?? '')),
+                'assigned_office_id' => $row['assigned_office_id'] ?? null,
+                'assigned_team_id' => $row['assigned_team_id'] ?? null,
+                'assigned_agent_id' => $row['assigned_agent_id'] ?? null,
+            ];
+        }
+
+        $now = date('c');
+        $insertLead = $pdo->prepare("
+            INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, client_password, assigned_office_id, assigned_team_id, assigned_agent_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $importedLeads = [];
+        $pdo->beginTransaction();
+        try {
+            foreach ($preparedRows as $lead) {
+                $insertLead->execute([
+                    $lead['id'], $lead['first_name'], $lead['last_name'], $lead['name'], $lead['email'],
+                    $lead['phone'], $lead['country'], $lead['country_code'], $lead['stage'], $lead['stage'],
+                    $lead['funnel'], $lead['company'], $lead['service'], $lead['budget'], $lead['timeline'],
+                    $lead['message'], $lead['notes'], $lead['client_password'], $lead['assigned_office_id'],
+                    $lead['assigned_team_id'], $lead['assigned_agent_id'], $now, $now,
+                ]);
+                if ($lead['client_password'] !== '') ensurePortalClientForLead($pdo, $lead, $lead['client_password'], $now);
+                $importedLeads[] = normalizeLeadRow($lead + [
+                    'status' => $lead['stage'],
+                    'source' => 'csv_import',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                    'comment_history' => [],
+                    'status_history' => [],
+                    'appointments' => [],
+                ]);
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'imported' => count($importedLeads), 'leads' => $importedLeads]);
     }
 
     if ($isAdminLeadCollection && $method === 'POST') {
@@ -683,24 +802,78 @@ if ($apiPath === '/admin/users') {
 // -----------------------------------------------------------------------------
 // 5. ADMIN: SET CLIENT PASSWORD & VIEW PASSWORD
 // -----------------------------------------------------------------------------
-if (preg_match('#^/admin/users/([^/]+)/set-password$#', $apiPath, $m) || preg_match('#^/admin/leads/([^/]+)/set-password$#', $apiPath, $m)) {
-    $userId = $m[1];
-    $newPassword = trim($input['password'] ?? $input['client_password'] ?? '');
-    if (!$newPassword) {
+if (
+    (preg_match('#^/admin/users/([^/]+)/set-password$#', $apiPath, $userPasswordMatch)
+        || preg_match('#^/admin/leads/([^/]+)/set-password$#', $apiPath, $leadPasswordMatch))
+    && $method === 'POST'
+) {
+    $isLeadPassword = isset($leadPasswordMatch[1]);
+    $userId = rawurldecode($isLeadPassword ? $leadPasswordMatch[1] : $userPasswordMatch[1]);
+    $newPassword = trim((string)($input['password'] ?? $input['new_password'] ?? $input['client_password'] ?? ''));
+    if ($newPassword === '') {
         jsonResponse(['ok' => false, 'error' => 'Password cannot be empty.'], 400);
     }
 
-    // Update portal_clients
-    $pdo->prepare("UPDATE portal_clients SET password = ? WHERE id = ? OR email = ?")->execute([$newPassword, $userId, $userId]);
-    // Update leads
-    $pdo->prepare("UPDATE leads SET client_password = ? WHERE id = ? OR email = ?")->execute([$newPassword, $userId, $userId]);
+    $now = date('c');
+    if ($isLeadPassword) {
+        $leadStmt = $pdo->prepare('SELECT id, name, company, email, phone, country, country_code, created_at FROM leads WHERE id = ?');
+        $leadStmt->execute([$userId]);
+        $lead = $leadStmt->fetch();
+        if (!$lead) jsonResponse(['ok' => false, 'error' => 'Lead not found.'], 404);
+        $leadEmail = strtolower(trim((string)($lead['email'] ?? '')));
+        if (!filter_var($leadEmail, FILTER_VALIDATE_EMAIL)) {
+            jsonResponse(['ok' => false, 'error' => 'Add a valid email to this lead before creating portal access.'], 400);
+        }
+        $lead['email'] = $leadEmail;
 
-    // Record audit log
+        $pdo->beginTransaction();
+        try {
+            $portalClient = ensurePortalClientForLead($pdo, $lead, $newPassword, $now);
+            $pdo->prepare('UPDATE leads SET client_password = ?, updated_at = ? WHERE id = ?')->execute([$newPassword, $now, $userId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        $clientId = $portalClient['id'];
+        $accountCreated = $portalClient['created'];
+    } else {
+        $clientStmt = $pdo->prepare('SELECT id, email FROM portal_clients WHERE id = ? LIMIT 1');
+        $clientStmt->execute([$userId]);
+        $client = $clientStmt->fetch();
+        if (!$client) {
+            $clientStmt = $pdo->prepare('SELECT id, email FROM portal_clients WHERE LOWER(email) = ? LIMIT 1');
+            $clientStmt->execute([strtolower($userId)]);
+            $client = $clientStmt->fetch();
+        }
+        if (!$client) jsonResponse(['ok' => false, 'error' => 'Client portal account not found.'], 404);
+
+        $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
+        if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the client password.'], 500);
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $client['id']]);
+            $pdo->prepare('UPDATE leads SET client_password = ?, updated_at = ? WHERE id = ? OR LOWER(email) = ?')
+                ->execute([$newPassword, $now, $userId, strtolower((string)$client['email'])]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        $clientId = (string)$client['id'];
+        $accountCreated = false;
+    }
+
     $auditId = 'aud_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 4);
-    $pdo->prepare("INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, 'PASSWORD_RESET', 'Admin updated account password', ?)")
-        ->execute([$auditId, $userId, date('c')]);
+    $pdo->prepare("INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, 'PASSWORD_RESET', 'Admin updated client portal password', ?)")
+        ->execute([$auditId, $clientId, $now]);
 
-    jsonResponse(['ok' => true, 'message' => 'Client portal password updated successfully.', 'password' => $newPassword]);
+    jsonResponse([
+        'ok' => true,
+        'message' => 'Client portal password updated successfully.',
+        'client_id' => $clientId,
+        'client_account_created' => $accountCreated,
+    ]);
 }
 
 // -----------------------------------------------------------------------------

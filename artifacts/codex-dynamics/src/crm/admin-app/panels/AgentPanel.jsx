@@ -801,7 +801,6 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
     const pwd = passwordInput.trim();
     try {
       await adminSetClientPassword(lead.id, pwd);
-      portalDb.setClientPassword(lead.id, pwd);
       updateLead(lead.id, { clientPassword: pwd, client_password: pwd });
       setLiveClientPassword(pwd);
       setPasswordInput('');
