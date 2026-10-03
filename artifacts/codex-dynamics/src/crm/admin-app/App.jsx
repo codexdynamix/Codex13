@@ -575,10 +575,11 @@ function App() {
           ...prev,
           users: injectAdminUser(prev.users, adminUser),
         }));
-      } catch (_) {
-        // Token missing or invalid
-      } finally {
         await loadBackendAdminData();
+      } catch (_) {
+        // Token missing or invalid. Do not request protected CRM data before
+        // sign-in; addAdminToData loads it after a successful login.
+        setDataLoading(false);
       }
     };
     initSession();
