@@ -37,6 +37,18 @@ function findSession(PDO $pdo, string $table, string $ownerColumn): ?array {
     return $row ? ['id' => $row['owner_id']] : null;
 }
 
+function normalizeLeadRow(array $lead): array {
+    foreach (['comment_history', 'status_history', 'appointments'] as $field) {
+        if (is_string($lead[$field] ?? null)) {
+            $decoded = json_decode($lead[$field], true);
+            $lead[$field] = is_array($decoded) ? $decoded : [];
+        } elseif (!is_array($lead[$field] ?? null)) {
+            $lead[$field] = [];
+        }
+    }
+    return $lead;
+}
+
 $adminSession = null;
 $portalSession = null;
 $isAdminLogin = in_array($apiPath, ['/admin/login', '/admin/bootstrap', '/admin/setup-status'], true);
@@ -119,8 +131,244 @@ if ($apiPath === '/crm/leads') {
         jsonResponse(['ok' => true, 'id' => $id, 'message' => 'Thank you! Your inquiry has been received.']);
     }
 
-    $leads = $pdo->query("SELECT * FROM leads ORDER BY created_at DESC")->fetchAll();
-    jsonResponse(['ok' => true, 'leads' => $leads]);
+    // This is a public intake endpoint, not a public CRM data export. Admin
+    // reads use the authenticated /admin/leads routes below.
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+}
+
+// -----------------------------------------------------------------------------
+// 2a. ADMIN LEADS (authenticated list, search, create, edit, soft delete)
+// -----------------------------------------------------------------------------
+$adminLeadResourceMatch = [];
+$adminLeadRestoreMatch = [];
+$isAdminLeadCollection = $apiPath === '/admin/leads';
+$isAdminLeadSearch = $apiPath === '/admin/leads/search';
+$isAdminLeadRestore = preg_match('#^/admin/leads/([^/]+)/restore$#', $apiPath, $adminLeadRestoreMatch) === 1;
+$isAdminLeadResource = preg_match('#^/admin/leads/([^/]+)$#', $apiPath, $adminLeadResourceMatch) === 1;
+
+if ($isAdminLeadCollection || $isAdminLeadSearch || $isAdminLeadRestore || $isAdminLeadResource) {
+    $adminStmt = $pdo->prepare("SELECT role, office_id, team_id, status, name FROM staff_users WHERE id = ?");
+    $adminStmt->execute([$adminSession['id']]);
+    $admin = $adminStmt->fetch();
+    if (!$admin || $admin['status'] !== 'Active') {
+        jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
+    }
+
+    $scopeSql = '';
+    $scopeParams = [];
+    if ($admin['role'] === 'Office Manager') {
+        $scopeSql = 'l.assigned_office_id = ?';
+        $scopeParams[] = $admin['office_id'] ?: '__no_office__';
+    } elseif ($admin['role'] === 'Team Leader') {
+        $scopeSql = 'l.assigned_team_id = ?';
+        $scopeParams[] = $admin['team_id'] ?: '__no_team__';
+    } elseif ($admin['role'] === 'Agent') {
+        $scopeSql = 'l.assigned_agent_id = ?';
+        $scopeParams[] = $adminSession['id'];
+    } elseif ($admin['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'This account cannot access CRM leads.'], 403);
+    }
+
+    if (($isAdminLeadCollection && $method === 'GET') || ($isAdminLeadSearch && $method === 'GET')) {
+        $filters = [];
+        $params = $scopeParams;
+        if ($scopeSql !== '') $filters[] = $scopeSql;
+
+        $includeDeleted = $_GET['include_deleted'] ?? '';
+        if ($includeDeleted === 'only') {
+            $filters[] = 'l.deleted_at IS NOT NULL';
+        } elseif ($includeDeleted !== '1') {
+            $filters[] = 'l.deleted_at IS NULL';
+        }
+
+        $search = trim((string)($_GET['search'] ?? $_GET['q'] ?? ''));
+        if ($search !== '') {
+            $filters[] = "(COALESCE(l.name, '') LIKE ? OR COALESCE(l.email, '') LIKE ? OR COALESCE(l.phone, '') LIKE ? OR COALESCE(l.company, '') LIKE ? OR COALESCE(l.service, '') LIKE ? OR COALESCE(l.message, '') LIKE ?)";
+            $needle = '%' . $search . '%';
+            array_push($params, $needle, $needle, $needle, $needle, $needle, $needle);
+        }
+        foreach (['stage' => 'l.stage', 'office_id' => 'l.assigned_office_id', 'team_id' => 'l.assigned_team_id', 'agent_id' => 'l.assigned_agent_id'] as $queryKey => $column) {
+            if (isset($_GET[$queryKey]) && (string)$_GET[$queryKey] !== '') {
+                $filters[] = "{$column} = ?";
+                $params[] = (string)$_GET[$queryKey];
+            }
+        }
+        $whereSql = $filters ? ' WHERE ' . implode(' AND ', $filters) : '';
+
+        if ($isAdminLeadSearch) {
+            $q = trim((string)($_GET['q'] ?? ''));
+            if ($q === '') jsonResponse(['ok' => true, 'leads' => []]);
+            $searchNeedle = '%' . $q . '%';
+            $limit = max(1, min(100, (int)($_GET['limit'] ?? 8)));
+            $searchFilters = [];
+            $searchParams = $scopeParams;
+            if ($scopeSql !== '') $searchFilters[] = $scopeSql;
+            $searchFilters[] = 'l.deleted_at IS NULL';
+            $searchFilters[] = "(COALESCE(l.name, '') LIKE ? OR COALESCE(l.email, '') LIKE ? OR COALESCE(l.phone, '') LIKE ? OR COALESCE(l.company, '') LIKE ?)";
+            array_push($searchParams, $searchNeedle, $searchNeedle, $searchNeedle, $searchNeedle);
+            $searchSql = ' WHERE ' . implode(' AND ', $searchFilters);
+            $stmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id{$searchSql} ORDER BY l.created_at DESC LIMIT ?");
+            $searchParams[] = $limit;
+            $stmt->execute($searchParams);
+            jsonResponse(['ok' => true, 'leads' => array_map('normalizeLeadRow', $stmt->fetchAll())]);
+        }
+
+        $countStmt = $pdo->prepare("SELECT COUNT(*) FROM leads l{$whereSql}");
+        $countStmt->execute($params);
+        $total = (int)$countStmt->fetchColumn();
+        $limit = max(1, min(10000, (int)($_GET['limit'] ?? 500)));
+        $offset = max(0, (int)($_GET['offset'] ?? 0));
+        $listStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id{$whereSql} ORDER BY l.created_at DESC, l.id DESC LIMIT ? OFFSET ?");
+        $listParams = $params;
+        $listParams[] = $limit;
+        $listParams[] = $offset;
+        $listStmt->execute($listParams);
+        $rows = array_map('normalizeLeadRow', $listStmt->fetchAll());
+        jsonResponse([
+            'ok' => true,
+            'leads' => $rows,
+            'total' => $total,
+            'limit' => $limit,
+            'offset' => $offset,
+            'has_more' => $offset + count($rows) < $total,
+        ]);
+    }
+
+    if ($isAdminLeadCollection && $method === 'POST') {
+        $firstName = trim((string)($input['first_name'] ?? ''));
+        $lastName = trim((string)($input['last_name'] ?? ''));
+        $name = trim((string)($input['name'] ?? trim($firstName . ' ' . $lastName)));
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'A lead name is required.'], 400);
+        if ($firstName === '' && $lastName === '') {
+            $parts = preg_split('/\\s+/', $name, 2);
+            $firstName = $parts[0] ?? '';
+            $lastName = $parts[1] ?? '';
+        }
+        $id = 'ld_' . bin2hex(random_bytes(8));
+        $now = date('c');
+        $stage = trim((string)($input['stage'] ?? $input['status'] ?? 'New')) ?: 'New';
+        $source = trim((string)($input['source'] ?? 'manual_crm_entry'));
+        $stmt = $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([
+            $id, $firstName, $lastName, $name,
+            trim(strtolower((string)($input['email'] ?? ''))),
+            trim((string)($input['phone'] ?? '')),
+            trim((string)($input['country'] ?? 'United Kingdom')),
+            trim((string)($input['country_code'] ?? 'GB')),
+            $stage, $stage,
+            trim((string)($input['funnel'] ?? $input['service'] ?? 'General')),
+            trim((string)($input['company'] ?? '')),
+            trim((string)($input['service'] ?? '')),
+            trim((string)($input['budget'] ?? '')),
+            trim((string)($input['timeline'] ?? '')),
+            trim((string)($input['message'] ?? '')),
+            $source,
+            trim((string)($input['notes'] ?? '')),
+            $input['assigned_office_id'] ?? null,
+            $input['assigned_team_id'] ?? null,
+            $input['assigned_agent_id'] ?? null,
+            $now, $now,
+        ]);
+        $createdStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id WHERE l.id = ?");
+        $createdStmt->execute([$id]);
+        jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($createdStmt->fetch())], 201);
+    }
+
+    if ($isAdminLeadResource) {
+        $leadId = $adminLeadResourceMatch[1];
+        $leadFilters = ['l.id = ?', 'l.deleted_at IS NULL'];
+        $leadParams = [$leadId];
+        if ($scopeSql !== '') {
+            $leadFilters[] = $scopeSql;
+            array_push($leadParams, ...$scopeParams);
+        }
+        $leadWhere = ' WHERE ' . implode(' AND ', $leadFilters);
+        $leadStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id{$leadWhere}");
+        $leadStmt->execute($leadParams);
+        $existingLead = $leadStmt->fetch();
+        if (!$existingLead) jsonResponse(['ok' => false, 'error' => 'Lead not found.'], 404);
+
+        if ($method === 'GET') {
+            jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($existingLead)]);
+        }
+        if ($method === 'PATCH') {
+            $allowed = [
+                'first_name', 'last_name', 'name', 'email', 'phone', 'country',
+                'country_code', 'stage', 'status', 'funnel', 'company', 'service',
+                'budget', 'timeline', 'message', 'source', 'notes',
+                'assigned_office_id', 'assigned_team_id', 'assigned_agent_id',
+            ];
+            $updates = [];
+            foreach ($allowed as $field) {
+                if (array_key_exists($field, $input)) $updates[$field] = $input[$field];
+            }
+            if (isset($updates['stage']) && !isset($updates['status'])) $updates['status'] = $updates['stage'];
+            if (isset($updates['status']) && !isset($updates['stage'])) $updates['stage'] = $updates['status'];
+            if (isset($updates['first_name']) || isset($updates['last_name'])) {
+                $first = (string)($updates['first_name'] ?? $existingLead['first_name'] ?? '');
+                $last = (string)($updates['last_name'] ?? $existingLead['last_name'] ?? '');
+                $updates['name'] = trim($first . ' ' . $last);
+            }
+            if (!$updates) jsonResponse(['ok' => false, 'error' => 'No supported lead fields were provided.'], 400);
+
+            $oldStage = (string)($existingLead['stage'] ?? '');
+            $nextStage = (string)($updates['stage'] ?? $oldStage);
+            if ($nextStage !== $oldStage) {
+                $history = json_decode((string)($existingLead['status_history'] ?? '[]'), true);
+                if (!is_array($history)) $history = [];
+                $history[] = [
+                    'id' => 'st_' . bin2hex(random_bytes(5)),
+                    'from_stage' => $oldStage,
+                    'to_stage' => $nextStage,
+                    'by_admin_id' => $adminSession['id'],
+                    'by_name' => $admin['name'],
+                    'created_at' => date('c'),
+                ];
+                $updates['status_history'] = json_encode($history, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            }
+            $updates['updated_at'] = date('c');
+            $setSql = implode(', ', array_map(static fn($field) => "{$field} = ?", array_keys($updates)));
+            $updateParams = array_values($updates);
+            $updateFilters = ['id = ?', 'deleted_at IS NULL'];
+            $updateParams[] = $leadId;
+            if ($scopeSql !== '') {
+                $updateFilters[] = str_replace('l.', '', $scopeSql);
+                array_push($updateParams, ...$scopeParams);
+            }
+            $pdo->prepare("UPDATE leads SET {$setSql} WHERE " . implode(' AND ', $updateFilters))->execute($updateParams);
+            $updatedStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id{$leadWhere}");
+            $updatedStmt->execute($leadParams);
+            jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($updatedStmt->fetch())]);
+        }
+        if ($method === 'DELETE') {
+            $deleteScope = $scopeSql !== '' ? ' AND ' . str_replace('l.', '', $scopeSql) : '';
+            if (($_GET['permanent'] ?? '') === '1') {
+                $deleteStmt = $pdo->prepare('DELETE FROM leads WHERE id = ?' . $deleteScope);
+                $deleteStmt->execute($scopeSql !== '' ? array_merge([$leadId], $scopeParams) : [$leadId]);
+                jsonResponse(['ok' => true, 'id' => $leadId, 'deleted' => true]);
+            }
+            $deleteStmt = $pdo->prepare('UPDATE leads SET deleted_at = ?, updated_at = ? WHERE id = ?' . $deleteScope);
+            $now = date('c');
+            $deleteStmt->execute($scopeSql !== '' ? array_merge([$now, $now, $leadId], $scopeParams) : [$now, $now, $leadId]);
+            jsonResponse(['ok' => true, 'id' => $leadId, 'deleted' => true]);
+        }
+    }
+
+    if ($isAdminLeadRestore && $method === 'POST') {
+        $leadId = $adminLeadRestoreMatch[1];
+        $filters = ['id = ?', 'deleted_at IS NOT NULL'];
+        $params = [$leadId];
+        if ($scopeSql !== '') {
+            $filters[] = str_replace('l.', '', $scopeSql);
+            array_push($params, ...$scopeParams);
+        }
+        $stmt = $pdo->prepare('UPDATE leads SET deleted_at = NULL, updated_at = ? WHERE ' . implode(' AND ', $filters));
+        $stmt->execute(array_merge([date('c')], $params));
+        if ($stmt->rowCount() === 0) jsonResponse(['ok' => false, 'error' => 'Deleted lead not found.'], 404);
+        $restoredStmt = $pdo->prepare('SELECT * FROM leads WHERE id = ?');
+        $restoredStmt->execute([$leadId]);
+        jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($restoredStmt->fetch())]);
+    }
 }
 
 // -----------------------------------------------------------------------------

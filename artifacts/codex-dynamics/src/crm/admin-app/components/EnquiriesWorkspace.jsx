@@ -11,6 +11,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { StatusDropdown } from '../shared';
+import { createLeadApi, deleteLeadApi, fetchAllLeads, updateLeadApi } from '../adminApi';
 
 function formatRelativeTime(dateString) {
   if (!dateString) return '-';
@@ -33,6 +34,46 @@ function formatRelativeTime(dateString) {
 
 function cleanPhoneForWhatsApp(phone = '') {
   return String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
+}
+
+function enquiryStatusFromLead(lead) {
+  const stage = String(lead?.status || lead?.stage || 'new').trim().toLowerCase();
+  if (['new', 'new intake'].includes(stage)) return 'new';
+  if (['deposit', 'converted', 'won', 'client'].includes(stage)) return 'converted';
+  if (['closed', 'lost', 'not interested', 'failed deposit', "didn't register", 'no potential'].includes(stage)) {
+    return 'closed';
+  }
+  return 'contacted';
+}
+
+function leadStageFromEnquiryStatus(status) {
+  return {
+    new: 'New',
+    contacted: 'In Line',
+    converted: 'Deposit',
+    closed: 'Not Interested',
+  }[status] || 'New';
+}
+
+function mapLeadToEnquiry(lead) {
+  const name = lead.name || `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+  return {
+    id: lead.id,
+    leadId: lead.id,
+    name: name || 'Anonymous Inquiry',
+    email: lead.email || '',
+    phone: lead.phone || '',
+    company: lead.company || '',
+    service: lead.service || 'General Inquiry',
+    budget: lead.budget || '',
+    timeline: lead.timeline || '',
+    message: lead.message || '',
+    source: lead.source || 'website_contact_modal',
+    status: enquiryStatusFromLead(lead),
+    stage: lead.stage || lead.status || 'New',
+    created_at: lead.createdAt || lead.created_at || new Date().toISOString(),
+    notes: lead.notes || '',
+  };
 }
 
 function EnquiryMessagePreview({ message, name, service, budget, timeline, created_at }) {
@@ -264,13 +305,13 @@ function EnquiryMessagePreview({ message, name, service, budget, timeline, creat
 }
 
 export default function EnquiriesWorkspace({
-  enquiries = [],
-  onAction,
   showNotification = () => {},
   onOpenLeadProfile = null,
   leads = [],
 }) {
   const [localList, setLocalList] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [serviceFilter, setServiceFilter] = useState('all');
@@ -279,80 +320,32 @@ export default function EnquiriesWorkspace({
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
-  // Sync inquiries from CRM store and public website local submissions
-  const syncInquiries = () => {
-    let combined = [];
-
-    // 1. Gather from public site localStorage 'codex-inquiries'
-    let publicSiteInquiries = [];
-    try {
-      const raw = localStorage.getItem('codex-inquiries');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          publicSiteInquiries = parsed.map((item, idx) => ({
-            id: item.id || (1800000000 + idx),
-            leadId: item.leadId || `ld_enq_${item.id || (1800000000 + idx)}`,
-            name: item.name || 'Anonymous Inquiry',
-            email: item.email || '',
-            phone: item.phone || '',
-            company: item.company || '',
-            service: item.service || 'General Inquiry',
-            budget: item.budget || '',
-            timeline: item.timeline || '',
-            message: item.message || '',
-            source: item.source || 'website_contact_modal',
-            status: item.status || 'new',
-            created_at: item.at || item.created_at || new Date().toISOString(),
-            notes: item.notes || '',
-          }));
-        }
-      }
-    } catch (e) {
-      void e;
-    }
-
-    // 2. Gather from parent CRM inquiries
-    const crmItems = Array.isArray(enquiries) ? enquiries : [];
-
-    // 3. Merge without duplicates (by email + created_at or id)
-    const seen = new Set();
-    const merged = [];
-
-    for (const item of [...crmItems, ...publicSiteInquiries]) {
-      const key = `${(item.email || '').toLowerCase().trim()}_${(item.name || '').toLowerCase().trim()}_${item.message?.slice(0, 20) || ''}`;
-      if (!seen.has(key) && !seen.has(item.id)) {
-        seen.add(key);
-        seen.add(item.id);
-        merged.push({
-          ...item,
-          status: item.status || 'new',
-          created_at: item.created_at || new Date().toISOString(),
-        });
-      }
-    }
-
-    combined = merged;
-
-    // Sort newest first
-    combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setLocalList(combined);
-  };
-
   useEffect(() => {
-    syncInquiries();
-  }, [enquiries]);
-
-  // Listen for real-time inquiry events from website forms
-  useEffect(() => {
-    const handleSync = () => {
-      syncInquiries();
+    let active = true;
+    const loadFromApi = async (initial = false) => {
+      if (initial) setIsLoading(true);
+      try {
+        const result = await fetchAllLeads();
+        if (!active) return;
+        const items = (result.leads || [])
+          .filter((lead) => !lead.deletedAt)
+          .map(mapLeadToEnquiry)
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        setLocalList(items);
+        setLoadError('');
+      } catch (error) {
+        if (active) setLoadError(error?.message || 'Could not load inquiries from the CRM API.');
+      } finally {
+        if (active && initial) setIsLoading(false);
+      }
     };
-    window.addEventListener('storage', handleSync);
-    window.addEventListener('codex_inquiry_added', handleSync);
+
+    loadFromApi(true);
+    const handleFocus = () => loadFromApi(false);
+    window.addEventListener('focus', handleFocus);
     return () => {
-      window.removeEventListener('storage', handleSync);
-      window.removeEventListener('codex_inquiry_added', handleSync);
+      active = false;
+      window.removeEventListener('focus', handleFocus);
     };
   }, []);
 
@@ -434,53 +427,55 @@ export default function EnquiriesWorkspace({
 
   // Status updates
   const handleUpdateStatus = async (id, newStatus) => {
-    setLocalList((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item))
-    );
+    const previous = localList.find((item) => item.id === id);
+    setLocalList((prev) => prev.map((item) => (
+      item.id === id ? { ...item, status: newStatus, stage: leadStageFromEnquiryStatus(newStatus) } : item
+    )));
     try {
-      if (onAction) {
-        await onAction('update_enquiry_status', { id, status: newStatus });
+      await updateLeadApi(String(id), { stage: leadStageFromEnquiryStatus(newStatus) });
+      showNotification(`Inquiry updated to "${newStatus}".`);
+    } catch (error) {
+      if (previous) {
+        setLocalList((prev) => prev.map((item) => (item.id === id ? previous : item)));
       }
-    } catch (err) {
-      void err;
+      showNotification(`Could not update inquiry: ${error?.message || 'API request failed.'}`);
     }
-    showNotification(`Inquiry updated to "${newStatus}".`);
   };
 
   // Delete single inquiry
   const handleDeleteEnquiry = async (id, name = 'Inquiry') => {
     if (!window.confirm(`Delete inquiry from "${name}"?`)) return;
-    setLocalList((prev) => prev.filter((item) => item.id !== id));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
     try {
-      if (onAction) {
-        await onAction('delete_enquiry', { id });
-      }
-    } catch (err) {
-      void err;
+      await deleteLeadApi(String(id));
+      setLocalList((prev) => prev.filter((item) => item.id !== id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      showNotification(`Deleted inquiry from ${name}.`);
+    } catch (error) {
+      showNotification(`Could not delete inquiry: ${error?.message || 'API request failed.'}`);
     }
-    showNotification(`Deleted inquiry from ${name}.`);
   };
 
   // Bulk status update
   const handleBulkUpdateStatus = async (status) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    setLocalList((prev) =>
-      prev.map((item) => (selectedIds.has(item.id) ? { ...item, status } : item))
-    );
-    for (const id of ids) {
-      try {
-        if (onAction) await onAction('update_enquiry_status', { id, status });
-      } catch (err) {
-        void err;
-      }
-    }
-    showNotification(`Updated ${ids.length} inquiries to "${status}".`);
+    const results = await Promise.allSettled(ids.map((id) => (
+      updateLeadApi(String(id), { stage: leadStageFromEnquiryStatus(status) })
+    )));
+    const succeeded = new Set(ids.filter((_, index) => results[index].status === 'fulfilled'));
+    setLocalList((prev) => prev.map((item) => (
+      succeeded.has(item.id)
+        ? { ...item, status, stage: leadStageFromEnquiryStatus(status) }
+        : item
+    )));
+    const failed = ids.length - succeeded.size;
+    showNotification(failed
+      ? `Updated ${succeeded.size} inquiries; ${failed} could not be updated.`
+      : `Updated ${ids.length} inquiries to "${status}".`);
     setSelectedIds(new Set());
   };
 
@@ -489,15 +484,13 @@ export default function EnquiriesWorkspace({
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     if (!window.confirm(`Delete ${ids.length} selected inquiries?`)) return;
-    setLocalList((prev) => prev.filter((item) => !selectedIds.has(item.id)));
-    for (const id of ids) {
-      try {
-        if (onAction) await onAction('delete_enquiry', { id });
-      } catch (err) {
-        void err;
-      }
-    }
-    showNotification(`Deleted ${ids.length} inquiries.`);
+    const results = await Promise.allSettled(ids.map((id) => deleteLeadApi(String(id))));
+    const succeeded = new Set(ids.filter((_, index) => results[index].status === 'fulfilled'));
+    setLocalList((prev) => prev.filter((item) => !succeeded.has(item.id)));
+    const failed = ids.length - succeeded.size;
+    showNotification(failed
+      ? `Deleted ${succeeded.size} inquiries; ${failed} could not be deleted.`
+      : `Deleted ${ids.length} inquiries.`);
     setSelectedIds(new Set());
   };
 
@@ -585,6 +578,8 @@ export default function EnquiriesWorkspace({
     const unifiedLead = matched
       ? {
           ...matched,
+          stage: enquiry.stage || matched.stage,
+          status: enquiry.stage || matched.status || matched.stage,
           // Ensure all rich enquiry intake details are merged into the profile
           company: matched.company || enquiry.company || 'Individual / None',
           service: matched.service || enquiry.service || 'General Inquiry',
@@ -644,6 +639,16 @@ export default function EnquiriesWorkspace({
 
   return (
     <div style={{ width: '100%' }}>
+      {loadError && (
+        <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: 'rgba(255, 69, 58, 0.12)', color: '#FF8B83', fontSize: 12 }}>
+          {loadError}
+        </div>
+      )}
+      {isLoading && localList.length === 0 && (
+        <div role="status" style={{ marginBottom: 12, color: 'var(--crm-text-secondary)', fontSize: 12 }}>
+          Loading inquiries from the CRM…
+        </div>
+      )}
       {/* 1. Stat Summary Cards - Exactly Matching Leads Table Layout */}
       {/* 1. Metric Counter Boxes - Apple iOS Glass Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 18 }}>
@@ -1184,45 +1189,31 @@ export default function EnquiriesWorkspace({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
-                const name = formData.get('name') || 'Customer';
-                const newEnquiry = {
-                  id: Date.now(),
-                  leadId: `ld_enq_${Date.now()}`,
-                  name,
-                  email: formData.get('email') || '',
-                  phone: formData.get('phone') || '',
-                  company: formData.get('company') || '',
-                  service: formData.get('service') || 'General Inquiry',
-                  budget: formData.get('budget') || '',
-                  timeline: formData.get('timeline') || '',
-                  message: formData.get('message') || '',
-                  source: 'manual_crm_entry',
-                  status: 'new',
-                  created_at: new Date().toISOString(),
-                  notes: '',
-                };
-                setLocalList((prev) => [newEnquiry, ...prev]);
-
-                // Store in public inquiries storage too
+                const name = String(formData.get('name') || 'Customer').trim();
+                const [firstName, ...lastNameParts] = name.split(/\s+/);
                 try {
-                  const raw = localStorage.getItem('codex-inquiries');
-                  const list = raw ? JSON.parse(raw) : [];
-                  list.unshift(newEnquiry);
-                  localStorage.setItem('codex-inquiries', JSON.stringify(list));
-                  window.dispatchEvent(new Event('storage'));
-                  window.dispatchEvent(new CustomEvent('codex_inquiry_added', { detail: newEnquiry }));
-                } catch {
-                  /* ignore */
+                  const created = await createLeadApi({
+                    firstName,
+                    lastName: lastNameParts.join(' '),
+                    email: String(formData.get('email') || ''),
+                    phone: String(formData.get('phone') || ''),
+                    company: String(formData.get('company') || ''),
+                    service: String(formData.get('service') || 'General Inquiry'),
+                    budget: String(formData.get('budget') || ''),
+                    timeline: String(formData.get('timeline') || ''),
+                    message: String(formData.get('message') || ''),
+                    source: 'manual_crm_entry',
+                    stage: 'New',
+                  });
+                  setLocalList((prev) => [mapLeadToEnquiry(created), ...prev]);
+                  setIsAddModalOpen(false);
+                  showNotification(`Logged customer inquiry from "${name}".`);
+                } catch (error) {
+                  showNotification(`Could not save inquiry: ${error?.message || 'API request failed.'}`);
                 }
-
-                if (onAction) {
-                  onAction('save_enquiry', newEnquiry).catch(() => {});
-                }
-                setIsAddModalOpen(false);
-                showNotification(`Logged customer inquiry from "${name}".`);
               }}
               style={{ display: 'grid', gap: 12 }}
             >

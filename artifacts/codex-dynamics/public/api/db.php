@@ -110,6 +110,20 @@ function initSchema(PDO $pdo): void {
             updated_at TEXT
         );
     ");
+    // Keep soft-deleted leads out of the active CRM while allowing admins to
+    // restore them. Existing SQLite/MySQL installs gain the nullable column
+    // without replacing or rebuilding their current lead data.
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $leadColumns = array_column($pdo->query('PRAGMA table_info(leads)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('deleted_at', $leadColumns, true)) {
+            $pdo->exec('ALTER TABLE leads ADD COLUMN deleted_at TEXT');
+        }
+    } else {
+        $column = $pdo->query("SHOW COLUMNS FROM leads LIKE 'deleted_at'")->fetch();
+        if (!$column) {
+            $pdo->exec('ALTER TABLE leads ADD COLUMN deleted_at TEXT NULL');
+        }
+    }
 
     // 2. Clients / Users Table
     $pdo->exec("
