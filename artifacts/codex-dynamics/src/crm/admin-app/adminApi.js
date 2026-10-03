@@ -606,6 +606,30 @@ export async function saveClientAccountingRecord(clientId, record) {
   });
 }
 
+export async function getAdminAccountingOverview() {
+  return adminFetch('/api/admin/accounting/overview');
+}
+
+export async function createClientRecurringService(clientId, service) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/services`, {
+    method: 'POST',
+    body: service,
+  });
+}
+
+export async function updateClientRecurringService(clientId, serviceId, service) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/services/${encodeURIComponent(serviceId)}`, {
+    method: 'PUT',
+    body: service,
+  });
+}
+
+export async function invoiceClientRecurringService(clientId, serviceId) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/services/${encodeURIComponent(serviceId)}/invoice`, {
+    method: 'POST',
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Admin ↔ Client support chat
 // ---------------------------------------------------------------------------

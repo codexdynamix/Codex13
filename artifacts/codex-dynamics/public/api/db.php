@@ -355,6 +355,24 @@ function initSchema(PDO $pdo): void {
         if (!$currencyColumn) $pdo->exec("ALTER TABLE client_payments ADD COLUMN currency VARCHAR(3) DEFAULT 'USD'");
     }
 
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_recurring_services (
+            id VARCHAR(191) PRIMARY KEY,
+            client_id VARCHAR(191) NOT NULL,
+            service_name VARCHAR(191) NOT NULL,
+            service_type VARCHAR(64) NOT NULL DEFAULT 'Other',
+            description TEXT,
+            amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+            currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+            billing_frequency VARCHAR(16) NOT NULL DEFAULT 'Monthly',
+            start_date DATE NOT NULL,
+            next_due_date DATE NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'Active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+    ");
+
     // Client credentials are encrypted by the API before they are stored.
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS client_access_credentials (

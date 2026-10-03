@@ -1,8 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getClientAccountingAdmin, saveClientAccountingRecord } from '../adminApi.js';
+import {
+  createClientRecurringService,
+  getClientAccountingAdmin,
+  invoiceClientRecurringService,
+  saveClientAccountingRecord,
+  updateClientRecurringService,
+} from '../adminApi.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const newLine = () => ({ description: '', service: 'Project creation', quantity: 1, unitPrice: 0 });
+const newRecurringService = () => ({
+  serviceName: '',
+  serviceType: 'Hosting',
+  description: '',
+  amount: '',
+  currency: 'USD',
+  billingFrequency: 'Monthly',
+  startDate: today(),
+  nextDueDate: today(),
+  status: 'Active',
+});
 const inputStyle = {
   boxSizing: 'border-box',
   width: '100%',
@@ -38,6 +55,20 @@ function normalizeInvoice(row) {
     currency: row.currency || 'USD',
   };
 }
+function normalizeRecurringService(row) {
+  return {
+    ...row,
+    serviceName: row.service_name || row.serviceName || '',
+    serviceType: row.service_type || row.serviceType || 'Other',
+    description: row.description || '',
+    amount: Number(row.amount || 0),
+    currency: row.currency || 'USD',
+    billingFrequency: row.billing_frequency || row.billingFrequency || 'Monthly',
+    startDate: dateInput(row.start_date || row.startDate, today()),
+    nextDueDate: dateInput(row.next_due_date || row.nextDueDate, today()),
+    status: row.status || 'Active',
+  };
+}
 function normalizePayment(row) {
   return {
     ...row,
@@ -59,8 +90,8 @@ function dateInput(value, fallback) {
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString().slice(0, 10);
 }
 
-export default function ClientAccountingPanel({ clientId, showNotification, canEdit = true }) {
-  const [records, setRecords] = useState({ invoices: [], payments: [], hosting: [], domains: [] });
+export default function ClientAccountingPanel({ clientId, showNotification, canEdit = true, onSaved }) {
+  const [records, setRecords] = useState({ invoices: [], payments: [], recurringServices: [], hosting: [], domains: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -72,6 +103,8 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
   const [dueDate, setDueDate] = useState(dateInput(null, new Date(Date.now() + 14 * 86400000).toISOString()));
   const [invoiceStatus, setInvoiceStatus] = useState('Pending');
   const [payment, setPayment] = useState({ invoiceId: '', paymentDate: today(), amount: '', paymentMethod: 'Bank transfer', transactionReference: '', description: '' });
+  const [serviceForm, setServiceForm] = useState(newRecurringService);
+  const [editingServiceId, setEditingServiceId] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -81,6 +114,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       setRecords({
         invoices: (result.invoices || []).map(normalizeInvoice),
         payments: (result.payments || []).map(normalizePayment),
+        recurringServices: (result.recurringServices || []).map(normalizeRecurringService),
         hosting: result.hosting || [],
         domains: result.domains || [],
       });
@@ -99,6 +133,9 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       billed: invoices.reduce((sum, invoice) => sum + invoice.total, 0),
       outstanding: invoices.reduce((sum, invoice) => sum + invoice.balanceDue, 0),
       received: payments.reduce((sum, row) => sum + row.amount, 0),
+      recurringMonthly: records.recurringServices
+        .filter((service) => service.currency === currency && service.status === 'Active')
+        .reduce((sum, service) => sum + service.amount / (service.billingFrequency === 'Yearly' ? 12 : 1), 0),
     };
   }, [records, currency]);
 
@@ -122,6 +159,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       setTaxRate(0);
       setMode('');
       await load();
+      onSaved?.();
       showNotification?.('Invoice created. Its balance is ready for payment tracking.');
     } catch (reason) {
       setError(reason?.message || 'Could not create the invoice.');
@@ -139,6 +177,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
       setPayment({ invoiceId: '', paymentDate: today(), amount: '', paymentMethod: 'Bank transfer', transactionReference: '', description: '' });
       setMode('');
       await load();
+      onSaved?.();
       showNotification?.('Payment recorded and receipt issued.');
     } catch (reason) {
       setError(reason?.message || 'Could not record the payment.');
@@ -148,6 +187,79 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
   };
 
   const selectedInvoice = records.invoices.find((invoice) => invoice.id === payment.invoiceId);
+  const startEditingService = (service) => {
+    setEditingServiceId(service.id);
+    setServiceForm({
+      serviceName: service.serviceName,
+      serviceType: service.serviceType,
+      description: service.description,
+      amount: String(service.amount),
+      currency: service.currency,
+      billingFrequency: service.billingFrequency,
+      startDate: service.startDate,
+      nextDueDate: service.nextDueDate,
+      status: service.status,
+    });
+    setMode('service');
+  };
+  const saveRecurringService = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const payload = { ...serviceForm, amount: Number(serviceForm.amount) };
+      if (editingServiceId) await updateClientRecurringService(clientId, editingServiceId, payload);
+      else await createClientRecurringService(clientId, payload);
+      setServiceForm(newRecurringService());
+      setEditingServiceId('');
+      setMode('');
+      await load();
+      onSaved?.();
+      showNotification?.(editingServiceId ? 'Recurring service updated.' : 'Recurring service added to the schedule.');
+    } catch (reason) {
+      setError(reason?.message || 'Could not save this recurring service.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const updateRecurringStatus = async (service, status) => {
+    setBusy(true);
+    setError('');
+    try {
+      await updateClientRecurringService(clientId, service.id, {
+        serviceName: service.serviceName,
+        serviceType: service.serviceType,
+        description: service.description,
+        amount: service.amount,
+        currency: service.currency,
+        billingFrequency: service.billingFrequency,
+        startDate: service.startDate,
+        nextDueDate: service.nextDueDate,
+        status,
+      });
+      await load();
+      onSaved?.();
+      showNotification?.(`Recurring service ${status.toLowerCase()}.`);
+    } catch (reason) {
+      setError(reason?.message || 'Could not update the recurring service.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createRecurringInvoice = async (service) => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await invoiceClientRecurringService(clientId, service.id);
+      await load();
+      onSaved?.();
+      showNotification?.(`Invoice ${result.invoiceNumber || ''} created for ${service.serviceName}.`);
+    } catch (reason) {
+      setError(reason?.message || 'Could not invoice this recurring service.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const serviceLines = [
     ...records.hosting.map((item) => ({ name: item.website_name || item.plan || 'Hosting', type: 'Hosting', detail: `${item.provider || 'Provider'} · ${item.billing_frequency || 'Recurring'} · ${item.status || 'Active'}`, amount: Number(item.amount || 0), due: item.renewal_date })),
     ...records.domains.map((item) => ({ name: item.domain_name || 'Domain', type: 'Domain', detail: `${item.registrar || 'Registrar'} · ${item.renewal_status || 'Active'}`, amount: null, due: item.expiration_date })),

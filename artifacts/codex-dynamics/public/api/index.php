@@ -241,6 +241,17 @@ function normalizeClientPhone(string $phone): string {
     return preg_replace('/\D+/', '', trim($phone)) ?? '';
 }
 
+function nextRecurringBillingDate(string $date, string $frequency): string {
+    $current = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+    if (!$current) throw new RuntimeException('The recurring billing date is invalid.');
+    $day = (int)$current->format('j');
+    $target = $frequency === 'Yearly'
+        ? $current->setDate((int)$current->format('Y') + 1, (int)$current->format('n'), 1)
+        : $current->modify('first day of next month');
+    $targetDay = min($day, (int)$target->format('t'));
+    return $target->setDate((int)$target->format('Y'), (int)$target->format('n'), $targetDay)->format('Y-m-d');
+}
+
 function loadClientIdentifierSets(PDO $pdo): array {
     $emails = [];
     $phones = [];
@@ -1625,6 +1636,217 @@ if (preg_match('#^/admin/clients/([^/]+)/access$#', $apiPath, $clientAccessMatch
     jsonResponse(['ok' => true, 'saved' => true]);
 }
 
+if ($apiPath === '/admin/accounting/overview') {
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    requireSuperAdmin($pdo, $adminSession);
+
+    $clientMap = [];
+    foreach ($pdo->query("SELECT id, name, company, email, status, portal_enabled FROM portal_clients")->fetchAll() as $client) {
+        $client['name'] = trim((string)($client['name'] ?? '')) ?: (trim((string)($client['company'] ?? '')) ?: 'Client');
+        $client['source'] = 'portal';
+        $clientMap[(string)$client['id']] = $client;
+    }
+    foreach ($pdo->query("SELECT id, first_name, last_name, name, company, email, status FROM leads WHERE deleted_at IS NULL")->fetchAll() as $leadClient) {
+        $id = (string)$leadClient['id'];
+        if (isset($clientMap[$id])) continue;
+        $fullName = trim((string)($leadClient['first_name'] ?? '') . ' ' . (string)($leadClient['last_name'] ?? ''));
+        $leadClient['name'] = trim((string)($leadClient['name'] ?? '')) ?: ($fullName ?: (trim((string)($leadClient['company'] ?? '')) ?: 'Client'));
+        $leadClient['company'] = (string)($leadClient['company'] ?? '');
+        $leadClient['email'] = (string)($leadClient['email'] ?? '');
+        $leadClient['portal_enabled'] = 0;
+        $leadClient['source'] = 'crm';
+        $clientMap[$id] = $leadClient;
+    }
+    $clients = array_values($clientMap);
+    usort($clients, static fn(array $a, array $b): int => strcasecmp((string)$a['name'], (string)$b['name']));
+
+    $invoices = $pdo->query("
+        SELECT i.*,
+               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
+               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+        FROM client_invoices i
+        LEFT JOIN portal_clients pc ON pc.id = i.client_id
+        LEFT JOIN leads l ON l.id = i.client_id
+        ORDER BY i.issue_date DESC, i.created_at DESC
+    ")->fetchAll();
+    $payments = $pdo->query("
+        SELECT p.*,
+               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
+               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+        FROM client_payments p
+        LEFT JOIN portal_clients pc ON pc.id = p.client_id
+        LEFT JOIN leads l ON l.id = p.client_id
+        ORDER BY p.payment_date DESC, p.created_at DESC
+    ")->fetchAll();
+    $recurringServices = $pdo->query("
+        SELECT s.*,
+               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
+               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+        FROM client_recurring_services s
+        LEFT JOIN portal_clients pc ON pc.id = s.client_id
+        LEFT JOIN leads l ON l.id = s.client_id
+        ORDER BY s.next_due_date ASC, s.service_name ASC
+    ")->fetchAll();
+    $hosting = $pdo->query('SELECT * FROM client_hosting ORDER BY renewal_date ASC')->fetchAll();
+    $domains = $pdo->query('SELECT * FROM client_domains ORDER BY expiration_date ASC')->fetchAll();
+
+    jsonResponse([
+        'ok' => true,
+        'clients' => $clients,
+        'invoices' => $invoices,
+        'payments' => $payments,
+        'recurringServices' => $recurringServices,
+        'hosting' => $hosting,
+        'domains' => $domains,
+    ]);
+}
+
+$accountingServiceInvoiceMatch = [];
+$accountingServiceResourceMatch = [];
+$accountingServiceCollectionMatch = [];
+$isAccountingServiceInvoice = preg_match('#^/admin/accounting/([^/]+)/services/([^/]+)/invoice$#', $apiPath, $accountingServiceInvoiceMatch) === 1;
+$isAccountingServiceResource = !$isAccountingServiceInvoice
+    && preg_match('#^/admin/accounting/([^/]+)/services/([^/]+)$#', $apiPath, $accountingServiceResourceMatch) === 1;
+$isAccountingServiceCollection = !$isAccountingServiceInvoice && !$isAccountingServiceResource
+    && preg_match('#^/admin/accounting/([^/]+)/services$#', $apiPath, $accountingServiceCollectionMatch) === 1;
+
+if ($isAccountingServiceInvoice || $isAccountingServiceResource || $isAccountingServiceCollection) {
+    $routeMatch = $isAccountingServiceInvoice
+        ? $accountingServiceInvoiceMatch
+        : ($isAccountingServiceResource ? $accountingServiceResourceMatch : $accountingServiceCollectionMatch);
+    $clientId = rawurldecode($routeMatch[1]);
+    $serviceId = $isAccountingServiceInvoice || $isAccountingServiceResource ? rawurldecode($routeMatch[2]) : '';
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', true);
+
+    $serviceTypes = ['Hosting', 'Domain', 'Custom email', 'Site maintenance', 'Support', 'Other'];
+    $isValidDate = static function (string $value): bool {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return false;
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+        return $date !== false && $date->format('Y-m-d') === $value;
+    };
+
+    if ($isAccountingServiceCollection) {
+        if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+
+        $clientStmt = $pdo->prepare("
+            SELECT id FROM portal_clients WHERE id = ?
+            UNION
+            SELECT id FROM leads WHERE id = ? AND deleted_at IS NULL
+            LIMIT 1
+        ");
+        $clientStmt->execute([$clientId, $clientId]);
+        if (!$clientStmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Choose an existing client account or profile.'], 404);
+
+        $serviceName = trim((string)($input['serviceName'] ?? ''));
+        $serviceType = trim((string)($input['serviceType'] ?? 'Other'));
+        $description = trim((string)($input['description'] ?? ''));
+        $amount = round((float)($input['amount'] ?? 0), 2);
+        $currency = strtoupper(trim((string)($input['currency'] ?? 'USD')));
+        $frequency = trim((string)($input['billingFrequency'] ?? 'Monthly'));
+        $startDate = trim((string)($input['startDate'] ?? date('Y-m-d')));
+        $nextDueDate = trim((string)($input['nextDueDate'] ?? ''));
+        if ($serviceName === '' || strlen($serviceName) > 191 || !in_array($serviceType, $serviceTypes, true)
+            || $amount <= 0 || $amount > 100000000 || !preg_match('/^[A-Z]{3}$/', $currency)
+            || !in_array($frequency, ['Monthly', 'Yearly'], true)
+            || !$isValidDate($startDate) || !$isValidDate($nextDueDate)) {
+            jsonResponse(['ok' => false, 'error' => 'Check the service name, amount, currency, billing frequency, and dates.'], 422);
+        }
+
+        $id = 'rsv_' . bin2hex(random_bytes(8));
+        $now = date('c');
+        $pdo->prepare("
+            INSERT INTO client_recurring_services
+                (id, client_id, service_name, service_type, description, amount, currency, billing_frequency, start_date, next_due_date, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)
+        ")->execute([$id, $clientId, $serviceName, $serviceType, $description, $amount, $currency, $frequency, $startDate, $nextDueDate, $now, $now]);
+        jsonResponse(['ok' => true, 'serviceId' => $id]);
+    }
+
+    if ($isAccountingServiceResource) {
+        if ($method !== 'PUT') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+        $existingStmt = $pdo->prepare('SELECT id FROM client_recurring_services WHERE id = ? AND client_id = ?');
+        $existingStmt->execute([$serviceId, $clientId]);
+        if (!$existingStmt->fetch()) jsonResponse(['ok' => false, 'error' => 'Recurring service not found.'], 404);
+
+        $serviceName = trim((string)($input['serviceName'] ?? ''));
+        $serviceType = trim((string)($input['serviceType'] ?? 'Other'));
+        $description = trim((string)($input['description'] ?? ''));
+        $amount = round((float)($input['amount'] ?? 0), 2);
+        $currency = strtoupper(trim((string)($input['currency'] ?? 'USD')));
+        $frequency = trim((string)($input['billingFrequency'] ?? 'Monthly'));
+        $startDate = trim((string)($input['startDate'] ?? ''));
+        $nextDueDate = trim((string)($input['nextDueDate'] ?? ''));
+        $status = trim((string)($input['status'] ?? 'Active'));
+        if ($serviceName === '' || strlen($serviceName) > 191 || !in_array($serviceType, $serviceTypes, true)
+            || $amount <= 0 || $amount > 100000000 || !preg_match('/^[A-Z]{3}$/', $currency)
+            || !in_array($frequency, ['Monthly', 'Yearly'], true)
+            || !$isValidDate($startDate) || !$isValidDate($nextDueDate)
+            || !in_array($status, ['Active', 'Paused', 'Cancelled'], true)) {
+            jsonResponse(['ok' => false, 'error' => 'Check the service details, amount, billing frequency, dates, and status.'], 422);
+        }
+        $pdo->prepare("
+            UPDATE client_recurring_services
+            SET service_name = ?, service_type = ?, description = ?, amount = ?, currency = ?,
+                billing_frequency = ?, start_date = ?, next_due_date = ?, status = ?, updated_at = ?
+            WHERE id = ? AND client_id = ?
+        ")->execute([$serviceName, $serviceType, $description, $amount, $currency, $frequency, $startDate, $nextDueDate, $status, date('c'), $serviceId, $clientId]);
+        jsonResponse(['ok' => true, 'saved' => true]);
+    }
+
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $pdo->beginTransaction();
+    try {
+        $serviceStmt = $pdo->prepare('SELECT * FROM client_recurring_services WHERE id = ? AND client_id = ?');
+        $serviceStmt->execute([$serviceId, $clientId]);
+        $service = $serviceStmt->fetch();
+        if (!$service || $service['status'] !== 'Active') {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'Only an active recurring service can be invoiced.'], 409);
+        }
+
+        $cycleStart = (string)$service['next_due_date'];
+        $nextDueDate = nextRecurringBillingDate($cycleStart, (string)$service['billing_frequency']);
+        $cycleEnd = DateTimeImmutable::createFromFormat('!Y-m-d', $nextDueDate)->modify('-1 day')->format('Y-m-d');
+        $updated = $pdo->prepare("UPDATE client_recurring_services SET next_due_date = ?, updated_at = ? WHERE id = ? AND client_id = ? AND next_due_date = ? AND status = 'Active'");
+        $updated->execute([$nextDueDate, date('c'), $serviceId, $clientId, $cycleStart]);
+        if ($updated->rowCount() !== 1) {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'This service was just invoiced or changed. Refresh the ledger and try again.'], 409);
+        }
+
+        $amount = round((float)$service['amount'], 2);
+        $invoiceId = 'inv_' . bin2hex(random_bytes(8));
+        $invoiceNumber = 'INV-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+        $issueDate = date('Y-m-d');
+        $lineItems = [[
+            'description' => trim((string)$service['service_name']) . ' · ' . $cycleStart . ' to ' . $cycleEnd,
+            'service' => (string)$service['service_type'],
+            'quantity' => 1,
+            'unitPrice' => $amount,
+            'total' => $amount,
+            'recurringServiceId' => $serviceId,
+        ]];
+        $notes = 'Recurring service billing cycle: ' . $cycleStart . ' to ' . $cycleEnd . '.';
+        $pdo->prepare("
+            INSERT INTO client_invoices
+                (id, client_id, invoice_number, issue_date, due_date, status, currency, subtotal, tax, total, amount_paid, balance_due, line_items, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, 'Pending', ?, ?, 0, ?, 0, ?, ?, ?, ?)
+        ")->execute([$invoiceId, $clientId, $invoiceNumber, $issueDate, $cycleStart, $service['currency'], $amount, $amount, $amount, json_encode($lineItems, JSON_UNESCAPED_UNICODE), $notes, date('c')]);
+        $pdo->commit();
+        jsonResponse([
+            'ok' => true,
+            'invoiceId' => $invoiceId,
+            'invoiceNumber' => $invoiceNumber,
+            'amount' => $amount,
+            'currency' => $service['currency'],
+            'nextDueDate' => $nextDueDate,
+        ]);
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+}
+
 if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
     $clientId = rawurldecode($accountingMatch[1]);
     requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', $method !== 'GET');
@@ -1633,11 +1855,13 @@ if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
         $invoices->execute([$clientId]);
         $payments = $pdo->prepare('SELECT * FROM client_payments WHERE client_id = ? ORDER BY payment_date DESC, created_at DESC');
         $payments->execute([$clientId]);
+        $recurringServices = $pdo->prepare('SELECT * FROM client_recurring_services WHERE client_id = ? ORDER BY next_due_date ASC, service_name ASC');
+        $recurringServices->execute([$clientId]);
         $hosting = $pdo->prepare('SELECT website_name, provider, plan, status, billing_frequency, amount, renewal_date FROM client_hosting WHERE client_id = ?');
         $hosting->execute([$clientId]);
         $domains = $pdo->prepare('SELECT domain_name, registrar, expiration_date, renewal_status FROM client_domains WHERE client_id = ?');
         $domains->execute([$clientId]);
-        jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll()]);
+        jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'recurringServices' => $recurringServices->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll()]);
     }
     if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     $now = date('c');
