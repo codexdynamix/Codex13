@@ -18,6 +18,7 @@ import StaffProfileModal from '../components/StaffProfileModal.jsx';
 import AuditLog from '../components/AuditLog/AuditLog.jsx';
 import Notifications from '../components/Notifications/Notifications.jsx';
 import NotificationToast from '../components/NotificationToast/NotificationToast.jsx';
+import AccountingWorkspace from '../components/AccountingWorkspace.jsx';
 import SecurityRequests from '../components/SecurityRequests/SecurityRequests.jsx';
 import Sessions from '../components/Sessions/Sessions.jsx';
 import AgentAccess from '../components/AgentAccess.jsx';
@@ -28,7 +29,7 @@ import { COUNTRY_LIST } from '../countryData';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faBell, faBuilding, faCog, faPalette, faHistory, faIdCard, faTachometerAlt, faTrash, faUser, faUserPlus, faUsers,
-  faArrowDown, faArrowUp, faKey, faGlobe, faComments, faBriefcase,
+  faArrowDown, faArrowUp, faKey, faGlobe, faComments, faBriefcase, faFileInvoiceDollar,
 } from '@fortawesome/free-solid-svg-icons';
 import {
   getAdminToken, getUserProfileHistoryApi,
@@ -2592,6 +2593,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     { name: 'Dashboard', icon: faTachometerAlt },
     { name: 'Client Management', icon: faUsers },
     { name: 'Staff', icon: faUsers },
+    { name: 'Accounting', icon: faFileInvoiceDollar },
     { name: 'Sessions', icon: faUsers },
     { name: 'Recycle Bin', icon: faTrash },
     { name: 'Site Settings', icon: faCog },
@@ -3172,6 +3174,8 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
                   showNotification={showNotification}
                 />
               </div>
+            ) : activeTab === 'Accounting' ? (
+              <AccountingWorkspace showNotification={showPanelNotification} />
             ) : activeTab === 'Staff' ? (
               <div style={{ padding: 24 }}>
                 <div className="crm-tab-row" style={{ marginBottom: 18 }}>

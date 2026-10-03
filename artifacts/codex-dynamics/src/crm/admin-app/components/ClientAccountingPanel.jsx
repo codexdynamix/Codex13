@@ -305,7 +305,7 @@ export default function ClientAccountingPanel({ clientId, showNotification, canE
             <div key={index} style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, .8fr) minmax(160px, 1.6fr) 90px 120px auto', alignItems: 'end', gap: 9 }}>
               <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--crm-text-secondary, #a1a1aa)' }}>Service
                 <select style={inputStyle} value={item.service} onChange={(e) => updateItem(index, 'service', e.target.value)}>
-                  {['Project creation', 'Hosting', 'Domain', 'Maintenance', 'Other'].map((name) => <option key={name}>{name}</option>)}
+                  {['Project creation', 'Website creation', 'Hosting', 'Domain', 'Custom email', 'Site maintenance', 'Maintenance', 'Support', 'Other'].map((name) => <option key={name}>{name}</option>)}
                 </select>
               </label>
               <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--crm-text-secondary, #a1a1aa)' }}>Description

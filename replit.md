@@ -16,6 +16,7 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - Saved website and mailbox passwords are encrypted using a key derived from `SESSION_SECRET`. Keep that secret stable across deployments and backups; changing it makes already-saved passwords unreadable until they are re-entered.
 - In-app mail uses the PHP IMAP extension plus the configured IMAP/SMTP hosts and ports (Hostinger defaults: IMAP SSL 993, SMTP SSL 465). Configure each client mailbox in the Super Admin profile and verify it with that mailbox before relying on mail delivery.
 - Accounting records are persistent invoices, payments, and receipt numbers. Invoice line items can be categorized as project creation, hosting, domain, maintenance, or other; drafts are hidden from the client portal.
+- The Super Admin Accounting workspace and the Accounting section in each client profile use the same invoice, payment, and recurring-service records. The workspace summarizes monthly activity, open and overdue balances, and scheduled monthly-equivalent service amounts; all totals stay grouped by currency.
 - Frontend typecheck: `pnpm --filter @workspace/codex-dynamics run typecheck`
 - PHP syntax checks: `php -l artifacts/codex-dynamics/public/api/index.php` and `php -l artifacts/codex-dynamics/public/api/db.php`
 

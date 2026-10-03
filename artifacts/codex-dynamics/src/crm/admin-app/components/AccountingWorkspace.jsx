@@ -38,7 +38,31 @@ const monthKey = (value) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value).slice(0, 7) : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
+const todayKey = () => {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+};
+const invoiceServices = (invoice) => {
+  let items = invoice?.line_items || invoice?.lineItems || [];
+  if (typeof items === 'string') {
+    try { items = JSON.parse(items); } catch { items = []; }
+  }
+  return asArray(items)
+    .map((item) => String(item?.service || item?.description || '').trim())
+    .filter(Boolean)
+    .filter((service, index, services) => services.indexOf(service) === index)
+    .join(' · ');
+};
 const normalizeStatus = (value) => String(value || 'Unspecified').trim();
+const invoiceDisplayStatus = (invoice, today = todayKey()) => {
+  const status = normalizeStatus(invoice?.status);
+  return asNumber(invoice?.balance_due) > 0
+    && status.toLowerCase() !== 'draft'
+    && invoice?.due_date
+    && String(invoice.due_date).slice(0, 10) < today
+    ? 'Overdue'
+    : status;
+};
 const statusTone = (value) => {
   const status = String(value || '').toLowerCase();
   if (['paid', 'active', 'received', 'complete', 'completed'].includes(status)) return 'positive';
@@ -153,7 +177,12 @@ export default function AccountingWorkspace({ showNotification }) {
   const monthPayments = useMemo(() => overview.payments.filter((row) => monthKey(row.payment_date) === selectedMonth), [overview.payments, selectedMonth]);
   const monthServices = useMemo(() => overview.recurringServices.filter((row) => monthKey(row.next_due_date) === selectedMonth), [overview.recurringServices, selectedMonth]);
   const dueInvoices = useMemo(() => overview.invoices.filter((row) => asNumber(row.balance_due) > 0 && String(row.status || '').toLowerCase() !== 'draft'), [overview.invoices]);
+  const overdueInvoices = useMemo(() => dueInvoices.filter((row) => invoiceDisplayStatus(row) === 'Overdue'), [dueInvoices]);
   const activeServices = useMemo(() => overview.recurringServices.filter((row) => !['inactive', 'cancelled', 'ended'].includes(String(row.status || '').toLowerCase())), [overview.recurringServices]);
+  const monthlyEquivalentServices = useMemo(() => activeServices.map((row) => ({
+    ...row,
+    amount: asNumber(row.amount) / (/year/i.test(String(row.billing_frequency || '')) ? 12 : 1),
+  })), [activeServices]);
 
   const query = search.trim().toLowerCase();
   const matchingClients = useMemo(() => overview.clients.filter((client) => {
@@ -161,17 +190,39 @@ export default function AccountingWorkspace({ showNotification }) {
     return [client.name, client.company, client.email].some((value) => String(value || '').toLowerCase().includes(query));
   }), [overview.clients, query]);
   const clientById = useMemo(() => new Map(overview.clients.map((client) => [String(client.id), client])), [overview.clients]);
+  const invoiceById = useMemo(() => new Map(overview.invoices.map((invoice) => [String(invoice.id), invoice])), [overview.invoices]);
   const accountRows = useMemo(() => {
     const entries = [
-      ...monthInvoices.map((row) => ({ kind: 'invoice', date: row.issue_date, id: row.id, clientId: row.client_id, name: row.client_name || clientById.get(String(row.client_id))?.name || 'Client', ref: row.invoice_number || `Invoice ${row.id}`, status: row.status, amount: row.total, currency: row.currency || 'USD', detail: `Due ${dateLabel(row.due_date, { day: '2-digit', month: 'short' })}`, raw: row })),
-      ...monthPayments.map((row) => ({ kind: 'payment', date: row.payment_date, id: row.id, clientId: row.client_id, name: row.client_name || clientById.get(String(row.client_id))?.name || 'Client', ref: row.receipt_number || `Receipt ${row.id}`, status: row.status || 'Received', amount: row.amount, currency: row.currency || 'USD', detail: row.payment_method || row.description || 'Payment received', raw: row })),
+      ...monthInvoices.map((row) => {
+        const services = invoiceServices(row);
+        return {
+          kind: 'invoice', date: row.issue_date, id: row.id, clientId: row.client_id,
+          name: row.client_name || clientById.get(String(row.client_id))?.name || 'Client',
+          ref: row.invoice_number || `Invoice ${row.id}`, status: invoiceDisplayStatus(row),
+          amount: row.total, currency: row.currency || 'USD',
+          detail: [services, `Due ${dateLabel(row.due_date, { day: '2-digit', month: 'short' })}`].filter(Boolean).join(' · '),
+          raw: row,
+        };
+      }),
+      ...monthPayments.map((row) => {
+        const invoice = row.invoice_id ? invoiceById.get(String(row.invoice_id)) : null;
+        const services = invoice ? invoiceServices(invoice) : '';
+        return {
+          kind: 'payment', date: row.payment_date, id: row.id, clientId: row.client_id,
+          name: row.client_name || clientById.get(String(row.client_id))?.name || 'Client',
+          ref: row.receipt_number || `Receipt ${row.id}`, status: row.status || 'Received',
+          amount: row.amount, currency: row.currency || 'USD',
+          detail: [row.payment_method || 'Payment', invoice?.invoice_number, services, !invoice ? row.description : ''].filter(Boolean).join(' · '),
+          raw: row,
+        };
+      }),
     ];
     return entries.filter((row) => {
       const textMatch = !query || [row.name, row.ref, row.detail, row.status].some((value) => String(value || '').toLowerCase().includes(query));
       const statusMatch = statusFilter === 'all' || String(row.status).toLowerCase() === statusFilter;
       return textMatch && statusMatch;
     }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-  }, [monthInvoices, monthPayments, clientById, query, statusFilter]);
+  }, [monthInvoices, monthPayments, clientById, invoiceById, query, statusFilter]);
 
   const openClient = (client) => {
     previousFocusRef.current = document.activeElement;
@@ -209,12 +260,9 @@ export default function AccountingWorkspace({ showNotification }) {
     <div className="aw-summary-row" aria-label={`${monthTitle} accounting summary`}>
       <Metric label="Invoices issued" icon={FileText} rows={monthInvoices} amountKey="total" detail={`${monthInvoices.length} invoice${monthInvoices.length === 1 ? '' : 's'} dated this month`} variant="billed" />
       <Metric label="Payments received" icon={ArrowDownLeft} rows={monthPayments} amountKey="amount" detail={`${monthPayments.length} receipt${monthPayments.length === 1 ? '' : 's'} dated this month`} variant="received" />
-      <Metric label="Open balances" icon={ArrowUpRight} rows={dueInvoices} amountKey="balance_due" detail={`${dueInvoices.length} invoice${dueInvoices.length === 1 ? '' : 's'} with a remaining balance`} variant="balance" />
-      <article className="aw-metric aw-metric-service" data-testid="card-metric-services">
-        <div className="aw-metric-top"><span>Service schedules</span><Layers3 size={16} aria-hidden="true" /></div>
-        <strong className="aw-metric-count" data-testid="text-active-service-count">{activeServices.length}</strong>
-        <p>{monthServices.length} due in {monthTitle}</p>
-      </article>
+      <Metric label="Open balances" icon={ArrowUpRight} rows={dueInvoices} amountKey="balance_due" detail={`${dueInvoices.length} open invoice${dueInvoices.length === 1 ? '' : 's'} across all clients`} variant="balance" />
+      <Metric label="Overdue balances" icon={CircleAlert} rows={overdueInvoices} amountKey="balance_due" detail={`${overdueInvoices.length} past-due invoice${overdueInvoices.length === 1 ? '' : 's'}`} variant="overdue" />
+      <Metric label="Monthly service equivalent" icon={Layers3} rows={monthlyEquivalentServices} amountKey="amount" detail={`${activeServices.length} active schedules · ${monthServices.length} due in ${monthTitle}; yearly fees divided by 12`} variant="service" />
     </div>
 
     <div className="aw-workbench">
@@ -264,13 +312,19 @@ export default function AccountingWorkspace({ showNotification }) {
         {loading ? <LedgerSkeleton /> : matchingClients.length ? <div className="aw-client-grid">
           {matchingClients.map((client) => {
             const invoices = overview.invoices.filter((row) => String(row.client_id) === String(client.id));
-            const clientServices = overview.recurringServices.filter((row) => String(row.client_id) === String(client.id));
+            const openInvoices = invoices.filter((row) => asNumber(row.balance_due) > 0 && String(row.status || '').toLowerCase() !== 'draft');
+            const clientServices = overview.recurringServices.filter((row) => String(row.client_id) === String(client.id)
+              && !['inactive', 'cancelled', 'ended'].includes(String(row.status || '').toLowerCase()));
             return <article className="aw-client-card" key={client.id} data-testid={`card-client-${client.id}`}>
               <div className="aw-client-card-head"><span className="aw-client-monogram" aria-hidden="true">{(client.name || client.company || 'C').trim().slice(0, 1).toUpperCase()}</span>
                 <div className="aw-client-identity"><strong data-testid={`text-client-name-${client.id}`}>{client.name || client.company || 'Unnamed client'}</strong><span data-testid={`text-client-contact-${client.id}`}>{client.company && client.company !== client.name ? client.company : (client.email || 'No email on file')}</span></div>
                 <StatusBadge value={client.status} testId={`status-client-${client.id}`} />
               </div>
-              <div className="aw-client-facts"><span><small>Open invoices</small><strong>{invoices.filter((row) => asNumber(row.balance_due) > 0).length}</strong></span><span><small>Schedules</small><strong>{clientServices.length}</strong></span></div>
+              <div className="aw-client-facts">
+                <span className="aw-client-balance"><small>Open balance</small><CurrencyAmounts rows={openInvoices} amountKey="balance_due" className="aw-client-currency" /></span>
+                <span><small>Open invoices</small><strong>{openInvoices.length}</strong></span>
+                <span><small>Active schedules</small><strong>{clientServices.length}</strong></span>
+              </div>
               <button type="button" className="aw-button aw-button-open" data-testid={`button-manage-client-${client.id}`} onClick={() => openClient(client)}>Manage ledger <ChevronRight size={15} aria-hidden="true" /></button>
             </article>;
           })}
