@@ -20,7 +20,7 @@
 .crm-admin-app .accounting-workspace select { font: inherit; }
 .crm-admin-app .accounting-workspace button { color: inherit; }
 .crm-admin-app .accounting-workspace button:focus-visible,
-.crm-admin-app .accounting-workspace input:focus-visible,
+.crm-admin-app .accounting-workspace input:not(.aw-search-input):focus-visible,
 .crm-admin-app .accounting-workspace select:focus-visible {
   outline: 2px solid var(--aw-accent);
   outline-offset: 2px;

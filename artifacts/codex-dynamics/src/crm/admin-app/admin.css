@@ -5124,7 +5124,7 @@
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
   box-shadow: none;
   height: auto;
-}.crm-admin-app .crm-super-admin-content input:focus,
+}.crm-admin-app .crm-super-admin-content input:not(.aw-search-input):focus,
 .crm-admin-app .crm-super-admin-content select:focus,
 .crm-admin-app .crm-super-admin-content textarea:focus {
   border-color: var(--cdx-accent);
@@ -5981,7 +5981,7 @@
   }
   .crm-admin-app.crm-admin-app input::placeholder,
   .crm-admin-app.crm-admin-app textarea::placeholder { color: var(--color-text-tertiary); }
-  .crm-admin-app.crm-admin-app input:focus,
+  .crm-admin-app.crm-admin-app input:not(.aw-search-input):focus,
   .crm-admin-app.crm-admin-app select:focus,
   .crm-admin-app.crm-admin-app textarea:focus,
   .crm-admin-app.crm-admin-app .crm-super-admin-input:focus,
@@ -8039,7 +8039,7 @@
 }
 
 /* --- Inputs: warmer accent border on focus (no big ring/glow) ---------- */
-.crm-admin-app.crm-admin-app input:focus,
+.crm-admin-app.crm-admin-app input:not(.aw-search-input):focus,
 .crm-admin-app.crm-admin-app select:focus,
 .crm-admin-app.crm-admin-app textarea:focus,
 .crm-admin-app.crm-admin-app .crm-super-admin-input:focus,
