@@ -32,16 +32,21 @@
 .crm-admin-app .aw-heading h1 { margin: 10px 0 3px; color: var(--aw-text); font-size: clamp(26px, 3vw, 34px); font-weight: 680; letter-spacing: -.045em; line-height: 1.12; }
 .crm-admin-app .aw-heading p, .crm-admin-app .aw-section-heading p { color: var(--aw-muted); font-size: 12px; line-height: 1.5; }
 .crm-admin-app .aw-header-actions { display: flex; align-items: center; gap: 9px; }
-.crm-admin-app .aw-month-control { display: flex; align-items: center; gap: 8px; border: 1px solid var(--aw-border); border-radius: 7px; background: var(--aw-surface); padding: 4px; }
+.crm-admin-app .aw-month-control { position: relative; display: flex; align-items: center; gap: 6px; border: 1px solid var(--aw-border); border-radius: 999px; background: var(--aw-surface); padding: 3px 5px; }
 .crm-admin-app .aw-month-control > span { min-width: 136px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: var(--aw-text); font-size: 12px; font-weight: 600; }
-.crm-admin-app .aw-month-control > span svg { color: var(--aw-accent); }
-.crm-admin-app .aw-icon-button { width: 31px; height: 31px; padding: 0; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--aw-muted); transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+.crm-admin-app .aw-icon-button { width: 30px; height: 30px; min-width: 30px; min-height: 30px; flex: 0 0 auto; margin: 0; padding: 0; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--aw-muted); box-shadow: none; transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
 .crm-admin-app .aw-icon-button:hover { background: var(--aw-surface-raised); border-color: var(--aw-border); color: var(--aw-text); }
 .crm-admin-app .aw-icon-button:active, .crm-admin-app .aw-button:active { transform: translateY(1px); }
-.crm-admin-app .aw-button { min-height: 37px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--aw-border); border-radius: 6px; padding: 0 12px; font-size: 12px; font-weight: 650; transition: background-color .16s ease, border-color .16s ease, transform .16s ease; }
+.crm-admin-app .aw-button { min-width: 0; min-height: 33px; margin: 0; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--aw-border); border-radius: 999px; padding: 0 12px; background: var(--aw-surface); color: var(--aw-text); box-shadow: none; font-size: 12px; font-weight: 600; line-height: 1; text-transform: none; white-space: nowrap; transition: background-color .16s ease, border-color .16s ease, transform .16s ease; }
 .crm-admin-app .aw-button-quiet { background: var(--aw-surface); color: var(--aw-text); }
 .crm-admin-app .aw-button-quiet:hover { background: var(--aw-surface-raised); border-color: color-mix(in srgb, var(--aw-accent) 45%, var(--aw-border)); }
+.crm-admin-app .aw-button-danger { border-color: #9b4c46; background: #9b4c46; color: #fff; }
+.crm-admin-app .aw-button-danger:hover { border-color: #b35b54; background: #b35b54; }
 .crm-admin-app .aw-button:disabled { cursor: not-allowed; opacity: .55; }
+.crm-admin-app .aw-month-picker-popover { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: 218px; padding: 12px; border: 1px solid var(--aw-border); border-radius: 10px; background: var(--aw-surface); color: var(--aw-text); box-shadow: 0 12px 28px rgb(0 0 0 / .22); }
+.crm-admin-app .aw-month-picker-popover label { display: block; margin: 0 0 7px; color: var(--aw-muted); font-size: 11px; font-weight: 600; }
+.crm-admin-app .aw-month-picker-input { width: 100%; min-width: 0; min-height: 34px; margin: 0 0 10px; padding: 6px 9px; border: 1px solid var(--aw-border); border-radius: 7px; background: var(--aw-base); color: var(--aw-text); font-size: 12px; }
+.crm-admin-app .aw-month-picker-done { width: 100%; }
 .crm-admin-app .aw-spinning { animation: aw-spin .85s linear infinite; }
 @keyframes aw-spin { to { transform: rotate(360deg); } }
 .crm-admin-app .aw-metric-groups { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.35fr); gap: 14px; margin-bottom: 19px; }
@@ -69,7 +74,7 @@
 .crm-admin-app .aw-workbench { overflow: hidden; border: 1px solid var(--aw-border); border-radius: 9px; background: var(--aw-surface); }
 .crm-admin-app .aw-workbench-head { min-height: 55px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 17px; border-bottom: 1px solid var(--aw-border); background: color-mix(in srgb, var(--aw-surface) 92%, var(--aw-base)); }
 .crm-admin-app .aw-tabs { display: flex; align-self: stretch; gap: 19px; }
-.crm-admin-app .aw-tabs button { position: relative; display: inline-flex; align-items: center; gap: 7px; padding: 0 1px; border: 0; background: transparent; color: var(--aw-muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.crm-admin-app .aw-tabs button { position: relative; min-width: 0; min-height: 0; margin: 0; display: inline-flex; align-items: center; gap: 7px; padding: 0 1px; border: 0; border-radius: 0; background: transparent; color: var(--aw-muted); box-shadow: none; font-size: 11px; font-weight: 600; text-transform: none; white-space: nowrap; }
 .crm-admin-app .aw-tabs button:hover { color: var(--aw-text); }
 .crm-admin-app .aw-tabs button.is-active { color: var(--aw-text); }
 .crm-admin-app .aw-tabs button.is-active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--aw-accent); }
@@ -118,7 +123,7 @@
 .crm-admin-app .aw-record-payment { color: var(--aw-accent); background: var(--aw-accent-soft); }
 .crm-admin-app .aw-record-cell strong, .crm-admin-app .aw-service-name strong { display: block; color: var(--aw-text); font-size: 11px; font-weight: 630; }
 .crm-admin-app .aw-record-cell small, .crm-admin-app .aw-service-name small { display: block; max-width: 220px; margin-top: 2px; overflow: hidden; color: var(--aw-muted); font-size: 9px; text-overflow: ellipsis; }
-.crm-admin-app .aw-client-link { max-width: 190px; overflow: hidden; padding: 3px 0; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--aw-text); font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.crm-admin-app .aw-client-link { min-width: 0; min-height: 0; margin: 0; max-width: 190px; overflow: hidden; padding: 3px 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; color: var(--aw-text); box-shadow: none; font-size: 11px; text-align: left; text-transform: none; text-overflow: ellipsis; white-space: nowrap; }
 .crm-admin-app .aw-client-link:hover { border-color: var(--aw-accent); color: var(--aw-accent); }
 .crm-admin-app .aw-date-cell { color: var(--aw-muted) !important; font-size: 10px; }
 .crm-admin-app .aw-align-right { text-align: right !important; }
@@ -128,8 +133,11 @@
 .crm-admin-app .aw-status-positive { border-color: rgba(119,183,162,.28); background: rgba(119,183,162,.09); color: #8fcbb6; }
 .crm-admin-app .aw-status-negative { border-color: rgba(211,139,120,.31); background: rgba(211,139,120,.09); color: #dda18e; }
 .crm-admin-app .aw-status-caution { border-color: rgba(202,167,108,.3); background: rgba(202,167,108,.09); color: #d8b97f; }
-.crm-admin-app .aw-row-action { padding: 5px 8px; border: 1px solid var(--aw-border); border-radius: 4px; background: transparent; color: var(--aw-muted); font-size: 9px; font-weight: 600; transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
+.crm-admin-app .aw-row-action { min-width: 0; min-height: 28px; margin: 0; padding: 4px 10px; border: 1px solid var(--aw-border); border-radius: 999px; background: var(--aw-surface); color: var(--aw-text); box-shadow: none; font-size: 10px; font-weight: 600; line-height: 1; text-transform: none; white-space: nowrap; transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
 .crm-admin-app .aw-row-action:hover { border-color: color-mix(in srgb, var(--aw-accent) 50%, var(--aw-border)); background: var(--aw-accent-soft); color: var(--aw-accent); }
+.crm-admin-app .aw-row-action.aw-item-remove { border-color: rgba(211,139,120,.3); background: transparent; color: #dda18e; }
+.crm-admin-app .aw-row-action.aw-item-remove:hover { border-color: rgba(211,139,120,.55); background: rgba(211,139,120,.1); color: #f0b5a1; }
+.crm-admin-app .aw-row-action.aw-edit-renewal { margin-top: 6px; }
 .crm-admin-app .aw-action-column { width: 94px; text-align: right; }
 .crm-admin-app .aw-empty-state { min-height: 208px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 27px 18px; text-align: center; }
 .crm-admin-app .aw-empty-rule { width: 36px; height: 2px; margin-bottom: 12px; background: var(--aw-accent); }

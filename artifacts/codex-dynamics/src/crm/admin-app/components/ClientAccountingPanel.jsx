@@ -354,8 +354,8 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
             {['USD', 'EUR', 'GBP', 'UAH'].map((value) => <option key={value}>{value}</option>)}
           </select>
           {canEdit ? <>
-            <button type="button" onClick={() => setMode(mode === 'invoice' ? '' : 'invoice')} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '9px 12px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>New invoice</button>
-            <button type="button" onClick={() => setMode(mode === 'payment' ? '' : 'payment')} style={{ border: 0, borderRadius: 8, padding: '9px 12px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Record payment</button>
+            <button type="button" className="aw-button aw-button-quiet" onClick={() => setMode(mode === 'invoice' ? '' : 'invoice')}>New invoice</button>
+            <button type="button" className="aw-button aw-button-primary" onClick={() => setMode(mode === 'payment' ? '' : 'payment')}>Record payment</button>
           </> : <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Read-only access</span>}
         </div>
       </div>
@@ -399,11 +399,11 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
               <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--crm-text-secondary, #a1a1aa)' }}>Unit price
                 <input required type="number" min="0" step="0.01" style={inputStyle} value={item.unitPrice} onChange={(e) => updateItem(index, 'unitPrice', e.target.value)} />
               </label>
-              <button type="button" disabled={items.length === 1} onClick={() => setItems((current) => current.filter((_, i) => i !== index))} aria-label="Remove invoice item" style={{ border: 0, background: 'transparent', color: '#ff716b', cursor: 'pointer', padding: 10 }}>Remove</button>
+              <button type="button" className="aw-row-action aw-item-remove" disabled={items.length === 1} onClick={() => setItems((current) => current.filter((_, i) => i !== index))} aria-label="Remove invoice item">Remove</button>
             </div>
           ))}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => setItems((current) => [...current, newLine()])} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '8px 10px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>+ Add service</button>
+            <button type="button" className="aw-button aw-button-quiet" onClick={() => setItems((current) => [...current, newLine()])}>+ Add service</button>
             <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 12 }}>Tax %
               <input type="number" min="0" max="100" step="0.01" style={{ ...inputStyle, width: 90 }} value={taxRate} onChange={(e) => setTaxRate(e.target.value)} />
             </label>
@@ -417,7 +417,7 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
               <select style={{ ...inputStyle, width: 'auto' }} value={invoiceStatus} onChange={(e) => setInvoiceStatus(e.target.value)}><option value="Pending">Pending · visible in portal</option><option value="Draft">Keep as draft</option></select>
             </label>
             <strong style={{ marginLeft: 'auto' }}>Total: {money(invoiceEstimate.total, currency)}</strong>
-            <button disabled={busy} style={{ border: 0, borderRadius: 8, padding: '9px 14px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>{busy ? 'Saving…' : 'Create invoice'}</button>
+            <button className="aw-button aw-button-primary" disabled={busy}>{busy ? 'Saving…' : 'Create invoice'}</button>
           </div>
           <p style={{ margin: 0, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Pending invoices are visible in the client portal. Creating one does not send an email or charge the client.</p>
         </form>
@@ -448,7 +448,7 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
           <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--crm-text-secondary, #a1a1aa)' }}>Reference
             <input style={inputStyle} value={payment.transactionReference} onChange={(e) => setPayment({ ...payment, transactionReference: e.target.value })} placeholder="Bank or transaction reference" />
           </label>
-          <button disabled={busy} style={{ border: 0, borderRadius: 8, padding: '10px 14px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>{busy ? 'Saving…' : 'Record & issue receipt'}</button>
+          <button className="aw-button aw-button-primary" disabled={busy}>{busy ? 'Saving…' : 'Record & issue receipt'}</button>
           {selectedInvoice && <span style={{ gridColumn: '1 / -1', color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Remaining after payment: {money(Math.max(0, selectedInvoice.balanceDue - (Number(payment.amount) || 0)), selectedInvoice.currency)}</span>}
         </form>
       )}
@@ -463,8 +463,8 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
             <textarea required minLength={5} maxLength={500} rows={3} style={inputStyle} value={voidReason} onChange={(event) => setVoidReason(event.target.value)} placeholder="Explain why this receipt should be voided" data-testid="input-payment-void-reason" />
           </label>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" disabled={busy} onClick={() => { setVoidingPayment(null); setVoidReason(''); }} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '8px 11px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>Cancel</button>
-            <button disabled={busy || voidReason.trim().length < 5} style={{ border: 0, borderRadius: 8, padding: '8px 11px', background: '#9b4c46', color: '#fff', fontWeight: 700, cursor: 'pointer' }} data-testid="button-confirm-payment-void">{busy ? 'Saving…' : 'Void receipt'}</button>
+            <button type="button" className="aw-button aw-button-quiet" disabled={busy} onClick={() => { setVoidingPayment(null); setVoidReason(''); }}>Cancel</button>
+            <button className="aw-button aw-button-danger" disabled={busy || voidReason.trim().length < 5} data-testid="button-confirm-payment-void">{busy ? 'Saving…' : 'Void receipt'}</button>
           </div>
         </form>
       )}
@@ -520,7 +520,7 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
                   {isVoided && (row.voided_by || row.voided_at) && <small style={{ display: 'block', color: 'var(--crm-text-secondary, #a1a1aa)' }}>Audit: {row.voided_by || 'Admin'} · {row.voided_at || 'Date unavailable'}</small>}
                 </td>
                 {canEdit && <td style={{ padding: 9 }}>{!isVoided && ['completed', 'received', 'paid', 'partially paid'].includes(String(row.status || '').toLowerCase())
-                  ? <button type="button" disabled={busy} onClick={() => { setVoidingPayment(row); setVoidReason(''); }} style={{ border: '1px solid rgba(211,139,120,.4)', borderRadius: 6, padding: '5px 8px', background: 'transparent', color: '#dda18e', cursor: 'pointer' }} data-testid={`button-void-payment-${row.id}`}>Void</button>
+                  ? <button type="button" className="aw-row-action aw-item-remove" disabled={busy} onClick={() => { setVoidingPayment(row); setVoidReason(''); }} data-testid={`button-void-payment-${row.id}`}>Void</button>
                   : isVoided ? <span style={{ color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>Voided</span> : '—'}</td>}
               </tr>;
             })}</tbody>
@@ -536,7 +536,7 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
             {serviceLines.map((line, index) => <div key={`${line.type}-${line.id || index}`} style={{ padding: 12, border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 9 }} data-testid={`card-tracked-asset-${line.assetType}-${line.id}`}>
               <strong style={{ fontSize: 12 }}>{line.name}</strong><div style={{ marginTop: 4, color: 'var(--crm-text-secondary, #a1a1aa)', fontSize: 11 }}>{line.type} · {line.detail}</div>
               <div style={{ marginTop: 7, fontSize: 11 }}>{line.amount != null && line.amount > 0 ? `${money(line.amount, line.currency)} · ` : 'Not priced · '}Renewal {line.due || 'not set'}{line.type === 'Domain' && line.amount != null ? ' · annual' : ''}</div>
-              {canEdit && <button type="button" onClick={() => startEditingAsset(line)} style={{ marginTop: 8, border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 6, padding: '5px 8px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer', fontSize: 11 }} data-testid={`button-edit-renewal-${line.assetType}-${line.id}`}>{line.amount != null && line.amount > 0 ? 'Edit renewal price' : 'Add renewal price'}</button>}
+              {canEdit && <button type="button" className="aw-row-action aw-edit-renewal" onClick={() => startEditingAsset(line)} data-testid={`button-edit-renewal-${line.assetType}-${line.id}`}>{line.amount != null && line.amount > 0 ? 'Edit renewal price' : 'Add renewal price'}</button>}
             </div>)}
           </div>
         )}
@@ -553,8 +553,8 @@ export default function ClientAccountingPanel({ clientId, clientName = '', showN
               {[...new Set([assetDraft.currency, 'USD', 'EUR', 'GBP', 'UAH', 'CAD', 'AUD', 'CHF', 'PLN'].filter(Boolean))].map((value) => <option key={value}>{value}</option>)}
             </select>
           </label>
-          <button type="submit" disabled={busy || (assetEditing.assetType === 'hosting' && assetDraft.amount.trim() === '')} style={{ border: 0, borderRadius: 8, padding: '9px 12px', background: '#0A84FF', color: '#fff', fontWeight: 700, cursor: 'pointer' }} data-testid="button-save-renewal-price">{busy ? 'Saving…' : 'Save price'}</button>
-          <button type="button" disabled={busy} onClick={() => setAssetEditing(null)} style={{ border: '1px solid var(--crm-border, #3b3d45)', borderRadius: 8, padding: '8px 11px', background: 'transparent', color: 'var(--crm-text-primary, #fff)', cursor: 'pointer' }}>Cancel</button>
+          <button type="submit" className="aw-button aw-button-primary" disabled={busy || (assetEditing.assetType === 'hosting' && assetDraft.amount.trim() === '')} data-testid="button-save-renewal-price">{busy ? 'Saving…' : 'Save price'}</button>
+          <button type="button" className="aw-button aw-button-quiet" disabled={busy} onClick={() => setAssetEditing(null)}>Cancel</button>
         </form>
       )}
     </div>

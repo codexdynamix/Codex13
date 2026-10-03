@@ -156,6 +156,7 @@ export default function AccountingWorkspace({ showNotification }) {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [activeClient, setActiveClient] = useState(null);
   const [activeClientMode, setActiveClientMode] = useState('');
   const [globalActionMode, setGlobalActionMode] = useState('');
@@ -510,10 +511,37 @@ export default function AccountingWorkspace({ showNotification }) {
         <p>Monthly ledger, client balances, and recurring service schedules.</p>
       </div>
       <div className="aw-header-actions">
-        <div className="aw-month-control" aria-label="Selected accounting month">
+        <div className="aw-month-control" role="group" aria-label="Selected accounting month">
           <button type="button" className="aw-icon-button" aria-label="Previous month" data-testid="button-month-previous" onClick={() => moveMonth(-1)}><ChevronLeft size={17} /></button>
-          <span data-testid="text-selected-month"><CalendarDays size={15} aria-hidden="true" />{monthTitle}</span>
+          <span data-testid="text-selected-month">{monthTitle}</span>
+          <button
+            type="button"
+            className="aw-icon-button aw-month-picker-trigger"
+            aria-label="Choose accounting month"
+            aria-haspopup="dialog"
+            aria-expanded={monthPickerOpen}
+            aria-controls="aw-month-picker"
+            data-testid="button-open-accounting-month-picker"
+            onClick={() => setMonthPickerOpen((open) => !open)}
+          ><CalendarDays size={15} aria-hidden="true" /></button>
           <button type="button" className="aw-icon-button" aria-label="Next month" data-testid="button-month-next" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
+          {monthPickerOpen && <div className="aw-month-picker-popover" id="aw-month-picker" role="dialog" aria-label="Choose accounting month">
+            <label htmlFor="aw-month-picker-input">Go to month</label>
+            <input
+              className="aw-month-picker-input"
+              id="aw-month-picker-input"
+              type="month"
+              value={selectedMonth}
+              onChange={(event) => {
+                if (event.target.value) {
+                  setSelectedMonth(event.target.value);
+                  setMonthPickerOpen(false);
+                }
+              }}
+              data-testid="input-accounting-month"
+            />
+            <button type="button" className="aw-button aw-button-quiet aw-month-picker-done" onClick={() => setMonthPickerOpen(false)}>Done</button>
+          </div>}
         </div>
         <button type="button" className="aw-button aw-button-quiet" disabled={loading || !overview.clients.length} onClick={() => openGlobalAction('invoice')} data-testid="button-global-new-invoice"><Plus size={14} aria-hidden="true" />New invoice</button>
         <button type="button" className="aw-button aw-button-primary" disabled={loading || !overview.clients.length} onClick={() => openGlobalAction('payment')} data-testid="button-global-record-payment"><Plus size={14} aria-hidden="true" />Record payment</button>
