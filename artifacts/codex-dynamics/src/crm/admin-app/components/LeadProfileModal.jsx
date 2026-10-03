@@ -17,6 +17,8 @@ import {
   sendAdminMessage,
 } from '../adminApi.js';
 import { useConfirmDialog } from './ConfirmModal/ConfirmModal.jsx';
+import ClientAccessEditor from './ClientAccessEditor.jsx';
+import ClientAccountingPanel from './ClientAccountingPanel.jsx';
 
 function formatRelativeTime(dateString) {
   if (!dateString) return 'Just now';
@@ -56,7 +58,7 @@ export default function LeadProfileModal({
   const [reassignTeamId, setReassignTeamId] = useState('');
   const [reassignAgentId, setReassignAgentId] = useState('');
 
-  const [profileViewTab, setProfileViewTab] = useState('overview'); // 'overview' | 'security' | 'chat' | 'activity'
+  const [profileViewTab, setProfileViewTab] = useState('overview');
   const [liveClientPassword, setLiveClientPassword] = useState('');
   const [showClientPassword, setShowClientPassword] = useState(true);
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -694,6 +696,10 @@ export default function LeadProfileModal({
             {[
               { id: 'overview', label: '📋 Profile & Scope', color: '#0A84FF' },
               { id: 'security', label: '🔒 Client Security', color: '#FF453A' },
+              ...(currentUser?.role === ROLE.SUPER_ADMIN ? [
+                { id: 'access', label: '🔑 Access & Email', color: '#30D158' },
+                { id: 'accounting', label: '💳 Accounting', color: '#0A84FF' },
+              ] : []),
               { id: 'chat', label: `💬 Client Support ${chatMessages.length ? `(${chatMessages.length})` : ''}`, color: '#30D158' },
               { id: 'activity', label: '📊 Client Activity', color: '#0A84FF' },
             ].map((tab) => {
@@ -929,6 +935,18 @@ export default function LeadProfileModal({
                   Open /portal/dashboard &rarr;
                 </button>
               </div>
+            </div>
+          )}
+
+          {profileViewTab === 'access' && currentUser?.role === ROLE.SUPER_ADMIN && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border, rgba(255, 255, 255, 0.08))', borderRadius: 14, padding: 22, marginBottom: 20 }}>
+              <ClientAccessEditor clientId={lead.id} showNotification={showNotification} />
+            </div>
+          )}
+
+          {profileViewTab === 'accounting' && currentUser?.role === ROLE.SUPER_ADMIN && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border, rgba(255, 255, 255, 0.08))', borderRadius: 14, padding: 22, marginBottom: 20 }}>
+              <ClientAccountingPanel clientId={lead.id} showNotification={showNotification} />
             </div>
           )}
 

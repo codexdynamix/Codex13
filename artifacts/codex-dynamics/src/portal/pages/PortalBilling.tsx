@@ -24,15 +24,32 @@ interface PortalBillingProps {
 export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
   const [activeTab, setActiveTab] = useState<'invoices' | 'payments'>('invoices');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [currency, setCurrency] = useState('USD');
   const [selectedInvoice, setSelectedInvoice] = useState<ClientInvoice | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<ClientPayment | null>(null);
 
   const invoices = portalDb.getInvoices(client.id);
   const payments = portalDb.getPayments(client.id);
 
-  const totalInvoiced = invoices.reduce((sum, i) => sum + i.total, 0);
-  const totalPaid = invoices.reduce((sum, i) => sum + i.amountPaid, 0);
-  const totalBalanceDue = invoices.reduce((sum, i) => sum + i.balanceDue, 0);
+  const paymentCurrency = (payment: ClientPayment) =>
+    invoices.find((invoice) => invoice.id === payment.invoiceId)?.currency || payment.currency || 'USD';
+  const currencies = [...new Set([
+    ...invoices.map((invoice) => invoice.currency || 'USD'),
+    ...payments.map(paymentCurrency),
+  ])];
+  const displayCurrency = currencies.includes(currency) ? currency : currencies[0] || currency;
+  const formatMoney = (amount: number, code = displayCurrency) => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: code }).format(Number(amount) || 0);
+    } catch {
+      return `${code} ${(Number(amount) || 0).toFixed(2)}`;
+    }
+  };
+  const displayedInvoices = invoices.filter((invoice) => (invoice.currency || 'USD') === displayCurrency);
+  const totalInvoiced = displayedInvoices.reduce((sum, i) => sum + i.total, 0);
+  const totalPaid = displayedInvoices.reduce((sum, i) => sum + i.amountPaid, 0) +
+    payments.filter((payment) => !payment.invoiceId && paymentCurrency(payment) === displayCurrency).reduce((sum, payment) => sum + payment.amount, 0);
+  const totalBalanceDue = displayedInvoices.reduce((sum, i) => sum + i.balanceDue, 0);
 
   const filteredInvoices = invoices.filter((i) => {
     if (statusFilter === 'all') return true;
@@ -60,6 +77,14 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
         </div>
 
         <div className="flex items-center gap-2.5">
+          {currencies.length > 1 && (
+            <label className="flex items-center gap-2 text-xs text-[#86868B]">
+              Currency
+              <select value={displayCurrency} onChange={(event) => setCurrency(event.target.value)} className="rounded-xl border border-black/[0.08] dark:border-white/[0.1] bg-white dark:bg-[#1C1C1E] px-3 py-2 text-xs text-[#1D1D1F] dark:text-white">
+                {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+              </select>
+            </label>
+          )}
           <button
             onClick={() => onNavigate('/portal/support')}
             className="px-4 py-2 rounded-2xl bg-black/[0.04] dark:bg-white/[0.08] hover:bg-black/[0.07] dark:hover:bg-white/[0.12] text-[#1D1D1F] dark:text-[#F5F5F7] text-xs font-semibold border border-black/[0.04] dark:border-white/[0.06] transition-all"
@@ -75,7 +100,7 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
         <div className="p-7 rounded-3xl bg-white dark:bg-[#1C1C1E] border border-black/[0.06] dark:border-white/[0.08] shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
           <div className="text-xs text-[#86868B] font-medium uppercase tracking-wider">Outstanding Balance</div>
           <div className={`text-3xl sm:text-4xl font-semibold mt-3 font-mono tabular-nums tracking-tight ${totalBalanceDue > 0 ? 'text-[#B26A00] dark:text-[#FF9F0A]' : 'text-[#1D1D1F] dark:text-[#F5F5F7]'}`}>
-            ${totalBalanceDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            {formatMoney(totalBalanceDue)}
           </div>
           <div className="text-xs text-[#86868B] mt-2">
             {totalBalanceDue > 0 ? 'Payment due via bank wire or credit card' : 'All accounts settled in full'}
@@ -86,7 +111,7 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
         <div className="p-7 rounded-3xl bg-white dark:bg-[#1C1C1E] border border-black/[0.06] dark:border-white/[0.08] shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
           <div className="text-xs text-[#86868B] font-medium uppercase tracking-wider">Total Settled to Date</div>
           <div className="text-3xl sm:text-4xl font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-3 font-mono tabular-nums tracking-tight">
-            ${totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            {formatMoney(totalPaid)}
           </div>
           <div className="text-xs text-[#248A3D] dark:text-[#32D74B] mt-2 flex items-center gap-1.5 font-medium">
             <CheckCircle2 size={14} />
@@ -98,10 +123,10 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
         <div className="p-7 rounded-3xl bg-white dark:bg-[#1C1C1E] border border-black/[0.06] dark:border-white/[0.08] shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
           <div className="text-xs text-[#86868B] font-medium uppercase tracking-wider">Total Contract Volume</div>
           <div className="text-3xl sm:text-4xl font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-3 font-mono tabular-nums tracking-tight">
-            ${totalInvoiced.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            {formatMoney(totalInvoiced)}
           </div>
           <div className="text-xs text-[#86868B] mt-2">
-            <span>{invoices.length} billing statements generated</span>
+            <span>{displayedInvoices.length} billing statements · {displayCurrency}</span>
           </div>
         </div>
       </div>
@@ -187,10 +212,10 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
                       <td className="py-4 px-6 text-[#86868B]">{inv.issueDate}</td>
                       <td className="py-4 px-6 text-[#86868B]">{inv.dueDate}</td>
                       <td className="py-4 px-6 text-right font-mono font-semibold text-[#1D1D1F] dark:text-white tabular-nums">
-                        ${inv.total.toLocaleString()}
+                        {formatMoney(inv.total, inv.currency || 'USD')}
                       </td>
                       <td className="py-4 px-6 text-right font-mono font-semibold tabular-nums text-[#1D1D1F] dark:text-white">
-                        ${inv.balanceDue.toLocaleString()}
+                        {formatMoney(inv.balanceDue, inv.currency || 'USD')}
                       </td>
                       <td className="py-4 px-6 text-center">
                         <span
@@ -245,7 +270,7 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
                     <td className="py-4 px-6 text-[#1D1D1F] dark:text-white font-medium">{p.paymentMethod}</td>
                     <td className="py-4 px-6 font-mono text-[11px] text-[#86868B]">{p.transactionReference}</td>
                     <td className="py-4 px-6 text-right font-mono font-semibold text-[#248A3D] dark:text-[#32D74B] tabular-nums">
-                      ${p.amount.toLocaleString()}
+                      {formatMoney(p.amount, paymentCurrency(p))}
                     </td>
                     <td className="py-4 px-6 text-right">
                       <button
@@ -349,8 +374,8 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
                       <tr key={li.id}>
                         <td className="py-3 text-[#1D1D1F] dark:text-white font-medium">{li.description}</td>
                         <td className="py-3 text-center text-[#86868B]">{li.quantity}</td>
-                        <td className="py-3 text-right font-mono tabular-nums">${li.unitPrice.toLocaleString()}</td>
-                        <td className="py-3 text-right font-mono font-semibold text-[#1D1D1F] dark:text-white tabular-nums">${li.total.toLocaleString()}</td>
+                        <td className="py-3 text-right font-mono tabular-nums">{formatMoney(li.unitPrice, selectedInvoice.currency || 'USD')}</td>
+                        <td className="py-3 text-right font-mono font-semibold text-[#1D1D1F] dark:text-white tabular-nums">{formatMoney(li.total, selectedInvoice.currency || 'USD')}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -362,7 +387,7 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
                 <div className="w-64 space-y-2 text-xs">
                   <div className="flex justify-between text-[#86868B]">
                     <span>Subtotal:</span>
-                    <span className="font-mono text-[#1D1D1F] dark:text-white">${selectedInvoice.subtotal.toLocaleString()}</span>
+                    <span className="font-mono text-[#1D1D1F] dark:text-white">{formatMoney(selectedInvoice.subtotal, selectedInvoice.currency || 'USD')}</span>
                   </div>
                   <div className="flex justify-between text-[#86868B]">
                     <span>Tax (0% B2B):</span>
@@ -370,15 +395,15 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
                   </div>
                   <div className="flex justify-between text-sm font-semibold text-[#1D1D1F] dark:text-white pt-2 border-t border-black/[0.06] dark:border-white/[0.08]">
                     <span>Total Amount:</span>
-                    <span className="font-mono text-[#0071E3]">${selectedInvoice.total.toLocaleString()}</span>
+                    <span className="font-mono text-[#0071E3]">{formatMoney(selectedInvoice.total, selectedInvoice.currency || 'USD')}</span>
                   </div>
                   <div className="flex justify-between text-xs font-semibold text-[#248A3D] dark:text-[#32D74B]">
                     <span>Amount Paid:</span>
-                    <span className="font-mono">${selectedInvoice.amountPaid.toLocaleString()}</span>
+                    <span className="font-mono">{formatMoney(selectedInvoice.amountPaid, selectedInvoice.currency || 'USD')}</span>
                   </div>
                   <div className="flex justify-between text-xs font-semibold text-[#B26A00] dark:text-[#FF9F0A] pt-1 border-t border-black/[0.06] dark:border-white/[0.08]">
                     <span>Balance Due:</span>
-                    <span className="font-mono">${selectedInvoice.balanceDue.toLocaleString()}</span>
+                    <span className="font-mono">{formatMoney(selectedInvoice.balanceDue, selectedInvoice.currency || 'USD')}</span>
                   </div>
                 </div>
               </div>
@@ -433,7 +458,7 @@ export function PortalBilling({ client, onNavigate }: PortalBillingProps) {
               </div>
               <div className="flex justify-between pt-2.5 border-t border-black/[0.06] dark:border-white/[0.08] text-sm font-semibold">
                 <span className="text-[#1D1D1F] dark:text-white">Amount Confirmed:</span>
-                <span className="text-[#248A3D] dark:text-[#32D74B] font-mono tabular-nums">${selectedReceipt.amount.toLocaleString()}</span>
+                <span className="text-[#248A3D] dark:text-[#32D74B] font-mono tabular-nums">{formatMoney(selectedReceipt.amount, paymentCurrency(selectedReceipt))}</span>
               </div>
             </div>
 

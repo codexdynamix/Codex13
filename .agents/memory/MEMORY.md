@@ -1,2 +1,3 @@
 - [Cross-mode visual direction](cross-mode-visual-direction.md) — prefer opaque, calm surfaces and readable contrast; avoid glass blur and decorative glow.
 - [Imported app runtime checks](imported-app-runtime-checks.md) — verify runtime compatibility and the artifact-assigned port before retrying failed previews.
+- [Client credential encryption](client-credential-encryption.md) — the app’s saved website and mailbox passwords depend on a stable `SESSION_SECRET`; rotation requires re-entering them.

@@ -112,10 +112,11 @@ export interface ClientInvoice {
 export interface ClientPayment {
   id: string;
   clientId: string;
-  invoiceId: string;
+  invoiceId?: string;
   receiptNumber: string;
   paymentDate: string;
   amount: number;
+  currency?: string;
   paymentMethod: string;
   transactionReference: string;
   description: string;

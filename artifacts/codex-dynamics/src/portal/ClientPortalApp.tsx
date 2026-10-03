@@ -14,6 +14,8 @@ import { PortalSupport } from './pages/PortalSupport';
 import { PortalNotifications } from './pages/PortalNotifications';
 import { PortalProfile } from './pages/PortalProfile';
 import { PortalConnectorDemo } from './pages/PortalConnectorDemo';
+import { PortalAccess } from './pages/PortalAccess';
+import { PortalMail } from './pages/PortalMail';
 
 export function ClientPortalApp() {
   const getInitialPath = () => {
@@ -122,6 +124,12 @@ export function ClientPortalApp() {
   const renderPage = () => {
     if (currentPath === '/portal/websites') {
       return <PortalWebsites client={session.client} onNavigate={navigate} />;
+    }
+    if (currentPath === '/portal/access') {
+      return <PortalAccess client={session.client} onNavigate={navigate} />;
+    }
+    if (currentPath === '/portal/mail') {
+      return <PortalMail client={session.client} onNavigate={navigate} />;
     }
     if (currentPath === '/portal/projects') {
       return <PortalProjects client={session.client} onNavigate={navigate} />;

@@ -15,6 +15,8 @@ import {
   Menu,
   X,
   Layers,
+  KeyRound,
+  Mail,
 } from 'lucide-react';
 import { readPortalSession, clearPortalSession, setPortalSession } from '../services/portalAuth';
 import { portalDb, type PortalClient } from '../services/portalDatabase';
@@ -65,6 +67,8 @@ export function PortalShell({ currentPath, onNavigate, children }: PortalShellPr
   const navItems = [
     { path: '/portal/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/portal/websites', label: 'Websites & Back Offices', icon: Globe },
+    { path: '/portal/access', label: 'Access & Credentials', icon: KeyRound },
+    { path: '/portal/mail', label: 'Email Inbox', icon: Mail },
     { path: '/portal/projects', label: 'Projects & Milestones', icon: Briefcase },
     { path: '/portal/billing', label: 'Billing & Invoices', icon: Receipt },
     { path: '/portal/hosting', label: 'Hosting & Servers', icon: Server },

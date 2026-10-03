@@ -10,6 +10,10 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - A separate populated SQLite copy exists under `artifacts/codex-dynamics/artifacts/codex-dynamics/data/`; it is intentionally inactive and must remain untouched unless the user explicitly requests a data import or switch.
 - PHP can use MySQL when configured with `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASS`, or a PHP `config.php`; without those settings it uses the bundled SQLite database.
 - The Replit deployment filesystem is not durable across app restarts or republishing. Do not use the local SQLite file as the production CRM database; configure a durable MySQL database before publishing for real customer data. No production database migration has been performed.
+- Client website/mail credentials and accounting are managed only from the Super Admin client profile. The client portal uses owner-checked authenticated routes for access details, inbox reads, and replies.
+- Saved website and mailbox passwords are encrypted using a key derived from `SESSION_SECRET`. Keep that secret stable across deployments and backups; changing it makes already-saved passwords unreadable until they are re-entered.
+- In-app mail uses the PHP IMAP extension plus the configured IMAP/SMTP hosts and ports (Hostinger defaults: IMAP SSL 993, SMTP SSL 465). Configure each client mailbox in the Super Admin profile and verify it with that mailbox before relying on mail delivery.
+- Accounting records are persistent invoices, payments, and receipt numbers. Invoice line items can be categorized as project creation, hosting, domain, maintenance, or other; drafts are hidden from the client portal.
 - Frontend typecheck: `pnpm --filter @workspace/codex-dynamics run typecheck`
 - PHP syntax checks: `php -l artifacts/codex-dynamics/public/api/index.php` and `php -l artifacts/codex-dynamics/public/api/db.php`
 

@@ -337,11 +337,39 @@ function initSchema(PDO $pdo): void {
             receipt_number TEXT NOT NULL,
             payment_date TEXT NOT NULL,
             amount REAL DEFAULT 0,
+            currency VARCHAR(3) DEFAULT 'USD',
             payment_method TEXT,
             transaction_reference TEXT,
             description TEXT,
             status TEXT DEFAULT 'Completed',
             created_at TEXT
+        );
+    ");
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $paymentColumns = array_column($pdo->query('PRAGMA table_info(client_payments)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('currency', $paymentColumns, true)) {
+            $pdo->exec("ALTER TABLE client_payments ADD COLUMN currency VARCHAR(3) DEFAULT 'USD'");
+        }
+    } else {
+        $currencyColumn = $pdo->query("SHOW COLUMNS FROM client_payments LIKE 'currency'")->fetch();
+        if (!$currencyColumn) $pdo->exec("ALTER TABLE client_payments ADD COLUMN currency VARCHAR(3) DEFAULT 'USD'");
+    }
+
+    // Client credentials are encrypted by the API before they are stored.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_access_credentials (
+            client_id VARCHAR(191) PRIMARY KEY,
+            website_url TEXT,
+            website_username TEXT,
+            website_password_enc TEXT,
+            email_address TEXT,
+            webmail_url TEXT,
+            email_password_enc TEXT,
+            imap_host TEXT,
+            imap_port INTEGER DEFAULT 993,
+            smtp_host TEXT,
+            smtp_port INTEGER DEFAULT 465,
+            updated_at TEXT
         );
     ");
 

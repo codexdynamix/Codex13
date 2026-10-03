@@ -37,6 +37,166 @@ function findSession(PDO $pdo, string $table, string $ownerColumn): ?array {
     return $row ? ['id' => $row['owner_id']] : null;
 }
 
+function credentialEncryptionKey(): string {
+    $sessionSecret = (string)(getenv('SESSION_SECRET') ?: '');
+    if (strlen($sessionSecret) < 32) {
+        throw new RuntimeException('Credential encryption is not configured. Set SESSION_SECRET to a stable value of at least 32 characters.');
+    }
+    return hash_hmac('sha256', 'codex-client-credentials-v1', $sessionSecret, true);
+}
+
+function encryptClientSecret(string $plainText): string {
+    if ($plainText === '') return '';
+    $iv = random_bytes(12);
+    $tag = '';
+    $cipherText = openssl_encrypt($plainText, 'aes-256-gcm', credentialEncryptionKey(), OPENSSL_RAW_DATA, $iv, $tag, '', 16);
+    if ($cipherText === false) throw new RuntimeException('Could not securely store the credential.');
+    return base64_encode($iv . $tag . $cipherText);
+}
+
+function decryptClientSecret(?string $encoded): string {
+    if (!$encoded) return '';
+    $packed = base64_decode($encoded, true);
+    if ($packed === false || strlen($packed) < 29) throw new RuntimeException('Stored credential data is invalid.');
+    $plainText = openssl_decrypt(substr($packed, 28), 'aes-256-gcm', credentialEncryptionKey(), OPENSSL_RAW_DATA, substr($packed, 0, 12), substr($packed, 12, 16), '');
+    if ($plainText === false) throw new RuntimeException('Could not unlock the stored credential. Check that SESSION_SECRET has not changed.');
+    return $plainText;
+}
+
+function requireSuperAdmin(PDO $pdo, ?array $session): void {
+    if (!$session) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
+    $stmt = $pdo->prepare("SELECT role, status FROM staff_users WHERE id = ?");
+    $stmt->execute([$session['id']]);
+    $staff = $stmt->fetch();
+    if (!$staff || $staff['status'] !== 'Active') jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
+    if ($staff['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage client access and accounting.'], 403);
+}
+
+function decodeImapHeader(string $value): string {
+    if (!function_exists('imap_mime_header_decode')) return $value;
+    $parts = imap_mime_header_decode($value);
+    $decoded = '';
+    foreach ($parts ?: [] as $part) {
+        $text = (string)($part->text ?? '');
+        $charset = strtoupper((string)($part->charset ?? ''));
+        if ($charset !== '' && $charset !== 'DEFAULT' && $charset !== 'UTF-8' && function_exists('iconv')) {
+            $converted = @iconv($charset, 'UTF-8//IGNORE', $text);
+            if ($converted !== false) $text = $converted;
+        }
+        $decoded .= $text;
+    }
+    return $decoded;
+}
+
+function findImapTextPart(object $structure, string $partNumber = ''): ?array {
+    $htmlFallback = null;
+    $type = (int)($structure->type ?? 0);
+    $subtype = strtoupper((string)($structure->subtype ?? ''));
+    if ($type === 0 && in_array($subtype, ['PLAIN', 'HTML'], true)) {
+        $charset = '';
+        foreach (($structure->parameters ?? []) as $parameter) {
+            if (strtolower((string)($parameter->attribute ?? '')) === 'charset') $charset = (string)($parameter->value ?? '');
+        }
+        return ['number' => $partNumber !== '' ? $partNumber : '1', 'subtype' => $subtype, 'encoding' => (int)($structure->encoding ?? 0), 'charset' => $charset];
+    }
+    foreach (($structure->parts ?? []) as $index => $part) {
+        $number = $partNumber === '' ? (string)($index + 1) : $partNumber . '.' . ($index + 1);
+        $found = findImapTextPart($part, $number);
+        if ($found && $found['subtype'] === 'PLAIN') return $found;
+        if ($found) $htmlFallback = $found;
+    }
+    return $htmlFallback ?? null;
+}
+
+function readImapMessageText($mailbox, int $messageNumber): string {
+    $structure = @imap_fetchstructure($mailbox, $messageNumber);
+    if (!$structure) return '';
+    $part = findImapTextPart($structure);
+    if (!$part) return '';
+    $body = (string)@imap_fetchbody($mailbox, $messageNumber, $part['number'], FT_PEEK);
+    if ($part['encoding'] === 3) $body = base64_decode($body, true) ?: '';
+    elseif ($part['encoding'] === 4) $body = quoted_printable_decode($body);
+    if ($part['charset'] !== '' && strtoupper($part['charset']) !== 'UTF-8' && function_exists('iconv')) {
+        $converted = @iconv($part['charset'], 'UTF-8//IGNORE', $body);
+        if ($converted !== false) $body = $converted;
+    }
+    if ($part['subtype'] === 'HTML') {
+        $body = html_entity_decode(strip_tags(preg_replace('#<(br|/p|/div|/li)[^>]*>#i', "\n", $body)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+    return trim(function_exists('mb_substr') ? mb_substr($body, 0, 30000, 'UTF-8') : substr($body, 0, 30000));
+}
+
+function smtpReadResponse($socket): array {
+    $lines = [];
+    do {
+        $line = fgets($socket, 2048);
+        if ($line === false) throw new RuntimeException('The email server closed the connection.');
+        $lines[] = trim($line);
+    } while (strlen($line) >= 4 && $line[3] === '-');
+    return [(int)substr($lines[count($lines) - 1], 0, 3), implode("\n", $lines)];
+}
+
+function smtpCommand($socket, string $command, array $expectedCodes): string {
+    fwrite($socket, $command . "\r\n");
+    [$code, $response] = smtpReadResponse($socket);
+    if (!in_array($code, $expectedCodes, true)) throw new RuntimeException('The email server rejected an operation (' . $code . ').');
+    return $response;
+}
+
+function sendClientMailboxReply(array $access, string $recipient, string $subject, string $body, string $inReplyTo = ''): void {
+    $host = trim((string)$access['smtp_host']);
+    $port = (int)$access['smtp_port'];
+    $username = (string)$access['email_address'];
+    $password = decryptClientSecret($access['email_password_enc'] ?? '');
+    if ($host === '' || $username === '' || $password === '') throw new RuntimeException('Email sending is not configured for this account.');
+    if (!preg_match('/^[A-Za-z0-9.-]+$/', $host) || $port < 1 || $port > 65535 || !filter_var($username, FILTER_VALIDATE_EMAIL)) throw new RuntimeException('Email sending server settings are invalid.');
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL) || preg_match('/[\r\n]/', $recipient)) throw new RuntimeException('The reply address is not valid.');
+    if (preg_match('/[\r\n]/', $subject)) throw new RuntimeException('The email subject is not valid.');
+    if ($body === '' || strlen($body) > 40000) throw new RuntimeException('The reply must contain 1–40,000 characters.');
+
+    $endpoint = ($port === 465 ? 'ssl://' : '') . $host . ':' . $port;
+    $socket = @stream_socket_client($endpoint, $errno, $errstr, 20, STREAM_CLIENT_CONNECT, stream_context_create([
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true, 'peer_name' => $host],
+    ]));
+    if (!$socket) throw new RuntimeException('Could not connect to the email sending server.');
+    stream_set_timeout($socket, 20);
+    try {
+        [$code] = smtpReadResponse($socket);
+        if ($code !== 220) throw new RuntimeException('The email sending server is not ready.');
+        $domain = preg_replace('/[^A-Za-z0-9.-]/', '', (string)($_SERVER['SERVER_NAME'] ?? 'localhost')) ?: 'localhost';
+        smtpCommand($socket, 'EHLO ' . $domain, [250]);
+        if ($port !== 465) {
+            smtpCommand($socket, 'STARTTLS', [220]);
+            if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) throw new RuntimeException('Could not start a secure email connection.');
+            smtpCommand($socket, 'EHLO ' . $domain, [250]);
+        }
+        smtpCommand($socket, 'AUTH LOGIN', [334]);
+        smtpCommand($socket, base64_encode($username), [334]);
+        smtpCommand($socket, base64_encode($password), [235]);
+        smtpCommand($socket, 'MAIL FROM:<' . $username . '>', [250]);
+        smtpCommand($socket, 'RCPT TO:<' . $recipient . '>', [250, 251]);
+        smtpCommand($socket, 'DATA', [354]);
+        $safeSubject = 'Re: ' . preg_replace('/^(re:\s*)+/i', '', trim($subject));
+        $encodedSubject = '=?UTF-8?B?' . base64_encode($safeSubject) . '?=';
+        $headers = [
+            'From: <' . $username . '>',
+            'To: <' . $recipient . '>',
+            'Subject: ' . $encodedSubject,
+            'MIME-Version: 1.0',
+            'Content-Type: text/plain; charset=UTF-8',
+            'Content-Transfer-Encoding: 8bit',
+        ];
+        if ($inReplyTo !== '' && !preg_match('/[\r\n]/', $inReplyTo)) $headers[] = 'In-Reply-To: ' . $inReplyTo;
+        $message = implode("\r\n", $headers) . "\r\n\r\n" . preg_replace('/^\./m', '..', str_replace(["\r\n", "\r", "\n"], "\r\n", $body));
+        fwrite($socket, $message . "\r\n.\r\n");
+        [$dataCode] = smtpReadResponse($socket);
+        if ($dataCode !== 250) throw new RuntimeException('The email server could not send this reply.');
+        try { smtpCommand($socket, 'QUIT', [221]); } catch (Throwable $ignored) {}
+    } finally {
+        fclose($socket);
+    }
+}
+
 function normalizeLeadRow(array $lead): array {
     foreach (['comment_history', 'status_history', 'appointments'] as $field) {
         if (is_string($lead[$field] ?? null)) {
@@ -57,9 +217,9 @@ if (str_starts_with($apiPath, '/admin/') && !$isAdminLogin) {
     $adminSession = findSession($pdo, 'admin_sessions', 'user_id');
     if (!$adminSession) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
 }
-if (($apiPath === '/portal/data' || $apiPath === '/portal/profile' || $apiPath === '/portal/ticket' || $apiPath === '/portal/notifications' || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
+if (($apiPath === '/portal/data' || $apiPath === '/portal/profile' || $apiPath === '/portal/ticket' || $apiPath === '/portal/notifications' || $apiPath === '/portal/access' || $apiPath === '/portal/mail' || $apiPath === '/portal/mail/reply' || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
     $portalSession = findSession($pdo, 'portal_sessions', 'client_id');
-    if (!$portalSession && $apiPath === '/portal/data' && $method === 'GET') {
+    if (!$portalSession && in_array($apiPath, ['/portal/data', '/portal/access', '/portal/mail'], true) && $method === 'GET') {
         $admin = findSession($pdo, 'admin_sessions', 'user_id');
         if ($admin) {
             $roleStmt = $pdo->prepare("SELECT role FROM staff_users WHERE id = ? AND status = 'Active'");
@@ -948,6 +1108,168 @@ if ($apiPath === '/admin/logout' && $method === 'POST') {
     jsonResponse(['ok' => true]);
 }
 
+// Super Admin-only client access and accounting management.
+if (preg_match('#^/admin/clients/([^/]+)/access$#', $apiPath, $clientAccessMatch)) {
+    requireSuperAdmin($pdo, $adminSession);
+    $clientId = rawurldecode($clientAccessMatch[1]);
+    $stmt = $pdo->prepare('SELECT * FROM client_access_credentials WHERE client_id = ?');
+    $stmt->execute([$clientId]);
+    $existing = $stmt->fetch() ?: null;
+
+    if ($method === 'GET') {
+        jsonResponse(['ok' => true, 'access' => [
+            'websiteUrl' => $existing['website_url'] ?? '',
+            'websiteUsername' => $existing['website_username'] ?? '',
+            'hasWebsitePassword' => !empty($existing['website_password_enc']),
+            'emailAddress' => $existing['email_address'] ?? '',
+            'webmailUrl' => $existing['webmail_url'] ?? '',
+            'hasEmailPassword' => !empty($existing['email_password_enc']),
+            'imapHost' => $existing['imap_host'] ?? 'imap.hostinger.com',
+            'imapPort' => (int)($existing['imap_port'] ?? 993),
+            'smtpHost' => $existing['smtp_host'] ?? 'smtp.hostinger.com',
+            'smtpPort' => (int)($existing['smtp_port'] ?? 465),
+        ]]);
+    }
+    if ($method !== 'PUT' && $method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+
+    $websiteUrl = trim((string)($input['websiteUrl'] ?? ''));
+    $webmailUrl = trim((string)($input['webmailUrl'] ?? ''));
+    foreach (['Back-office URL' => $websiteUrl, 'Webmail URL' => $webmailUrl] as $label => $url) {
+        if ($url !== '' && (!filter_var($url, FILTER_VALIDATE_URL) || !in_array(strtolower((string)parse_url($url, PHP_URL_SCHEME)), ['https', 'http'], true))) {
+            jsonResponse(['ok' => false, 'error' => "{$label} must be a valid http or https link."], 422);
+        }
+    }
+    $email = strtolower(trim((string)($input['emailAddress'] ?? '')));
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid mailbox email address.'], 422);
+    $imapHost = trim((string)($input['imapHost'] ?? 'imap.hostinger.com'));
+    $smtpHost = trim((string)($input['smtpHost'] ?? 'smtp.hostinger.com'));
+    $imapPort = (int)($input['imapPort'] ?? 993);
+    $smtpPort = (int)($input['smtpPort'] ?? 465);
+    if (!preg_match('/^[A-Za-z0-9.-]+$/', $imapHost) || !preg_match('/^[A-Za-z0-9.-]+$/', $smtpHost) || $imapPort < 1 || $imapPort > 65535 || $smtpPort < 1 || $smtpPort > 65535) {
+        jsonResponse(['ok' => false, 'error' => 'Enter valid incoming and outgoing mail server settings.'], 422);
+    }
+    $now = date('c');
+    $websitePassword = (string)($input['websitePassword'] ?? '');
+    $emailPassword = (string)($input['emailPassword'] ?? '');
+    try {
+        $websitePasswordEnc = !empty($input['clearWebsitePassword']) ? '' : ($websitePassword !== '' ? encryptClientSecret($websitePassword) : ($existing['website_password_enc'] ?? ''));
+        $emailPasswordEnc = !empty($input['clearEmailPassword']) ? '' : ($emailPassword !== '' ? encryptClientSecret($emailPassword) : ($existing['email_password_enc'] ?? ''));
+    } catch (Throwable $error) {
+        error_log('[admin/client-access] Credential encryption failed: ' . $error->getMessage());
+        jsonResponse(['ok' => false, 'error' => 'Credential encryption is not configured. Ask the platform administrator to check the stable SESSION_SECRET setting.'], 503);
+    }
+    $record = [
+        'website_url' => $websiteUrl,
+        'website_username' => trim((string)($input['websiteUsername'] ?? '')),
+        'website_password_enc' => $websitePasswordEnc,
+        'email_address' => $email,
+        'webmail_url' => $webmailUrl,
+        'email_password_enc' => $emailPasswordEnc,
+        'imap_host' => $imapHost,
+        'imap_port' => $imapPort,
+        'smtp_host' => $smtpHost,
+        'smtp_port' => $smtpPort,
+        'updated_at' => $now,
+    ];
+    if ($existing) {
+        $pdo->prepare('UPDATE client_access_credentials SET website_url=?, website_username=?, website_password_enc=?, email_address=?, webmail_url=?, email_password_enc=?, imap_host=?, imap_port=?, smtp_host=?, smtp_port=?, updated_at=? WHERE client_id=?')
+            ->execute([...array_values($record), $clientId]);
+    } else {
+        $pdo->prepare('INSERT INTO client_access_credentials (website_url, website_username, website_password_enc, email_address, webmail_url, email_password_enc, imap_host, imap_port, smtp_host, smtp_port, updated_at, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            ->execute([...array_values($record), $clientId]);
+    }
+    jsonResponse(['ok' => true, 'saved' => true]);
+}
+
+if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
+    requireSuperAdmin($pdo, $adminSession);
+    $clientId = rawurldecode($accountingMatch[1]);
+    if ($method === 'GET') {
+        $invoices = $pdo->prepare('SELECT * FROM client_invoices WHERE client_id = ? ORDER BY issue_date DESC, created_at DESC');
+        $invoices->execute([$clientId]);
+        $payments = $pdo->prepare('SELECT * FROM client_payments WHERE client_id = ? ORDER BY payment_date DESC, created_at DESC');
+        $payments->execute([$clientId]);
+        $hosting = $pdo->prepare('SELECT website_name, provider, plan, status, billing_frequency, amount, renewal_date FROM client_hosting WHERE client_id = ?');
+        $hosting->execute([$clientId]);
+        $domains = $pdo->prepare('SELECT domain_name, registrar, expiration_date, renewal_status FROM client_domains WHERE client_id = ?');
+        $domains->execute([$clientId]);
+        jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll()]);
+    }
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $now = date('c');
+    if (($input['type'] ?? '') === 'invoice') {
+        $lineItems = $input['lineItems'] ?? [];
+        if (!is_array($lineItems) || count($lineItems) < 1 || count($lineItems) > 30) jsonResponse(['ok' => false, 'error' => 'Add between 1 and 30 invoice items.'], 422);
+        $cleanItems = [];
+        $subtotal = 0.0;
+        foreach ($lineItems as $item) {
+            $description = trim((string)($item['description'] ?? ''));
+            $service = trim((string)($item['service'] ?? 'Other'));
+            $quantity = (float)($item['quantity'] ?? 1);
+            $unitPrice = (float)($item['unitPrice'] ?? 0);
+            if ($description === '' || $quantity <= 0 || $quantity > 100000 || $unitPrice < 0 || $unitPrice > 100000000) jsonResponse(['ok' => false, 'error' => 'Check each item description, quantity, and price.'], 422);
+            $lineTotal = round($quantity * $unitPrice, 2);
+            $subtotal += $lineTotal;
+            $cleanItems[] = ['description' => $description, 'service' => $service, 'quantity' => $quantity, 'unitPrice' => round($unitPrice, 2), 'total' => $lineTotal];
+        }
+        $taxRate = (float)($input['taxRate'] ?? 0);
+        if ($taxRate < 0 || $taxRate > 100) jsonResponse(['ok' => false, 'error' => 'Tax rate must be between 0 and 100%.'], 422);
+        $subtotal = round($subtotal, 2);
+        $tax = round($subtotal * $taxRate / 100, 2);
+        $total = round($subtotal + $tax, 2);
+        $invoiceId = 'inv_' . bin2hex(random_bytes(8));
+        $invoiceNumber = trim((string)($input['invoiceNumber'] ?? ''));
+        if ($invoiceNumber === '') $invoiceNumber = 'INV-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+        $issueDate = trim((string)($input['issueDate'] ?? date('Y-m-d')));
+        $dueDate = trim((string)($input['dueDate'] ?? date('Y-m-d', strtotime('+14 days'))));
+        if (!DateTime::createFromFormat('Y-m-d', $issueDate) || !DateTime::createFromFormat('Y-m-d', $dueDate)) jsonResponse(['ok' => false, 'error' => 'Use a valid issue date and due date.'], 422);
+        $currency = strtoupper(trim((string)($input['currency'] ?? 'USD')));
+        if (!preg_match('/^[A-Z]{3}$/', $currency)) jsonResponse(['ok' => false, 'error' => 'Use a valid three-letter currency code.'], 422);
+        $pdo->prepare('INSERT INTO client_invoices (id, client_id, invoice_number, issue_date, due_date, status, currency, subtotal, tax, total, amount_paid, balance_due, line_items, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)')
+            ->execute([$invoiceId, $clientId, $invoiceNumber, $issueDate, $dueDate, trim((string)($input['status'] ?? 'Pending')) === 'Draft' ? 'Draft' : 'Pending', $currency, $subtotal, $tax, $total, $total, json_encode($cleanItems, JSON_UNESCAPED_UNICODE), trim((string)($input['notes'] ?? '')), $now]);
+        jsonResponse(['ok' => true, 'invoiceId' => $invoiceId, 'invoiceNumber' => $invoiceNumber, 'subtotal' => $subtotal, 'tax' => $tax, 'total' => $total, 'balanceDue' => $total]);
+    }
+    if (($input['type'] ?? '') === 'payment') {
+        $amount = round((float)($input['amount'] ?? 0), 2);
+        if ($amount <= 0 || $amount > 100000000) jsonResponse(['ok' => false, 'error' => 'Payment amount must be greater than zero.'], 422);
+        $invoiceId = trim((string)($input['invoiceId'] ?? ''));
+        $invoice = null;
+        if ($invoiceId !== '') {
+            $stmt = $pdo->prepare('SELECT * FROM client_invoices WHERE id = ? AND client_id = ?');
+            $stmt->execute([$invoiceId, $clientId]);
+            $invoice = $stmt->fetch();
+            if (!$invoice) jsonResponse(['ok' => false, 'error' => 'That invoice does not belong to this client.'], 422);
+            if (($invoice['status'] ?? '') === 'Draft') jsonResponse(['ok' => false, 'error' => 'A draft invoice cannot receive a payment until it is sent.'], 422);
+            if ($amount > (float)$invoice['balance_due'] + 0.005) jsonResponse(['ok' => false, 'error' => 'Payment is greater than the invoice balance.'], 422);
+        }
+        $paymentCurrency = strtoupper(trim((string)($invoice['currency'] ?? $input['currency'] ?? 'USD')));
+        if (!preg_match('/^[A-Z]{3}$/', $paymentCurrency)) jsonResponse(['ok' => false, 'error' => 'Use a valid three-letter payment currency code.'], 422);
+        $paymentDate = trim((string)($input['paymentDate'] ?? date('Y-m-d')));
+        if (!DateTime::createFromFormat('Y-m-d', $paymentDate)) jsonResponse(['ok' => false, 'error' => 'Use a valid payment date.'], 422);
+        $paymentId = 'pay_' . bin2hex(random_bytes(8));
+        $receiptNumber = 'RCP-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('INSERT INTO client_payments (id, client_id, invoice_id, receipt_number, payment_date, amount, currency, payment_method, transaction_reference, description, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                ->execute([$paymentId, $clientId, $invoiceId !== '' ? $invoiceId : null, $receiptNumber, $paymentDate, $amount, $paymentCurrency, trim((string)($input['paymentMethod'] ?? 'Bank transfer')), trim((string)($input['transactionReference'] ?? '')), trim((string)($input['description'] ?? 'Payment received')), 'Completed', $now]);
+            if ($invoice) {
+                $newPaid = round((float)$invoice['amount_paid'] + $amount, 2);
+                $balance = round(max(0, (float)$invoice['total'] - $newPaid), 2);
+                $status = $balance <= 0 ? 'Paid' : 'Partially Paid';
+                $paidDate = $balance <= 0 ? $paymentDate : null;
+                $pdo->prepare('UPDATE client_invoices SET amount_paid=?, balance_due=?, status=?, paid_date=? WHERE id=? AND client_id=?')
+                    ->execute([$newPaid, $balance, $status, $paidDate, $invoiceId, $clientId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'paymentId' => $paymentId, 'receiptNumber' => $receiptNumber]);
+    }
+    jsonResponse(['ok' => false, 'error' => 'Choose an invoice or payment record to save.'], 422);
+}
+
 if ($apiPath === '/admin/login' && $method === 'POST') {
     $email = strtolower(trim($input['email'] ?? ''));
     $password = $input['password'] ?? '';
@@ -1046,6 +1368,141 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
 // -----------------------------------------------------------------------------
 // 15. CLIENT PORTAL: COMPLETE DASHBOARD DATA
 // -----------------------------------------------------------------------------
+if ($apiPath === '/portal/access' && $method === 'GET') {
+    header('Cache-Control: no-store, private');
+    header('Pragma: no-cache');
+    $clientId = trim((string)($_GET['client_id'] ?? $portalSession['id']));
+    if ($clientId === '') jsonResponse(['ok' => false, 'error' => 'Missing client account.'], 400);
+    if (empty($portalSession['impersonating']) && $clientId !== $portalSession['id']) jsonResponse(['ok' => false, 'error' => 'Forbidden.'], 403);
+    $stmt = $pdo->prepare('SELECT * FROM client_access_credentials WHERE client_id = ?');
+    $stmt->execute([$clientId]);
+    $access = $stmt->fetch();
+    if (!$access) jsonResponse(['ok' => true, 'access' => null]);
+    try {
+        jsonResponse(['ok' => true, 'access' => [
+            'websiteUrl' => $access['website_url'] ?? '',
+            'websiteUsername' => $access['website_username'] ?? '',
+            'websitePassword' => decryptClientSecret($access['website_password_enc'] ?? ''),
+            'emailAddress' => $access['email_address'] ?? '',
+            'webmailUrl' => $access['webmail_url'] ?? '',
+            'emailPassword' => decryptClientSecret($access['email_password_enc'] ?? ''),
+        ]]);
+    } catch (Throwable $error) {
+        error_log('[portal/access] Credential decryption failed: ' . $error->getMessage());
+        jsonResponse(['ok' => false, 'error' => 'Saved access details cannot be opened. Ask your administrator to check the credential encryption setup.'], 503);
+    }
+}
+
+if ($apiPath === '/portal/mail' && $method === 'GET') {
+    header('Cache-Control: no-store, private');
+    header('Pragma: no-cache');
+    $clientId = trim((string)($_GET['client_id'] ?? $portalSession['id']));
+    if ($clientId === '') jsonResponse(['ok' => false, 'error' => 'Missing client account.'], 400);
+    if (empty($portalSession['impersonating']) && $clientId !== $portalSession['id']) jsonResponse(['ok' => false, 'error' => 'Forbidden.'], 403);
+    $stmt = $pdo->prepare('SELECT * FROM client_access_credentials WHERE client_id = ?');
+    $stmt->execute([$clientId]);
+    $access = $stmt->fetch();
+    if (!$access || empty($access['email_address']) || empty($access['email_password_enc'])) {
+        jsonResponse(['ok' => false, 'error' => 'Email access has not been configured for this client yet.'], 409);
+    }
+    $host = trim((string)($access['imap_host'] ?? ''));
+    $port = (int)($access['imap_port'] ?? 993);
+    if (!preg_match('/^[A-Za-z0-9.-]+$/', $host) || $port < 1 || $port > 65535) jsonResponse(['ok' => false, 'error' => 'Incoming email server settings are invalid.'], 503);
+    try {
+        $password = decryptClientSecret($access['email_password_enc']);
+    } catch (Throwable $error) {
+        error_log('[portal/mail] Credential decryption failed: ' . $error->getMessage());
+        jsonResponse(['ok' => false, 'error' => 'The email password could not be opened. Ask your administrator to check the encryption setup.'], 503);
+    }
+    if (!function_exists('imap_open')) jsonResponse(['ok' => false, 'error' => 'The server is missing the PHP IMAP extension required for in-app email.'], 503);
+    $tlsMode = $port === 143 ? '/imap/tls' : '/imap/ssl';
+    $mailbox = @imap_open('{' . $host . ':' . $port . $tlsMode . '}INBOX', (string)$access['email_address'], $password, OP_READONLY, 1, ['DISABLE_AUTHENTICATOR' => 'GSSAPI']);
+    if (!$mailbox) {
+        error_log('[portal/mail] IMAP connection failed: ' . (string)imap_last_error());
+        jsonResponse(['ok' => false, 'error' => 'Could not connect to this mailbox. Check the email login and incoming server settings with your administrator.'], 502);
+    }
+    try {
+        $uid = (int)($_GET['uid'] ?? 0);
+        if ($uid > 0) {
+            $messageNumber = imap_msgno($mailbox, $uid);
+            if ($messageNumber < 1) jsonResponse(['ok' => false, 'error' => 'That email is no longer in the inbox. Refresh the list.'], 404);
+            $overview = imap_fetch_overview($mailbox, (string)$messageNumber, 0);
+            $item = $overview[0] ?? null;
+            if (!$item) jsonResponse(['ok' => false, 'error' => 'Could not load this email.'], 502);
+            $messageId = trim((string)($item->message_id ?? ''), "<> \t\n\r\0\x0B");
+            jsonResponse(['ok' => true, 'email' => [
+                'uid' => $uid,
+                'from' => decodeImapHeader((string)($item->from ?? '')),
+                'to' => decodeImapHeader((string)($item->to ?? '')),
+                'subject' => decodeImapHeader((string)($item->subject ?? '(No subject)')),
+                'date' => (string)($item->date ?? ''),
+                'messageId' => $messageId,
+                'body' => readImapMessageText($mailbox, $messageNumber),
+            ]]);
+        }
+        $messageNumbers = imap_search($mailbox, 'ALL') ?: [];
+        rsort($messageNumbers, SORT_NUMERIC);
+        $messages = [];
+        foreach (array_slice($messageNumbers, 0, 40) as $messageNumber) {
+            $overview = imap_fetch_overview($mailbox, (string)$messageNumber, 0);
+            if (!$overview || !isset($overview[0])) continue;
+            $item = $overview[0];
+            $messages[] = [
+                'uid' => (int)imap_uid($mailbox, (int)$messageNumber),
+                'from' => decodeImapHeader((string)($item->from ?? '')),
+                'subject' => decodeImapHeader((string)($item->subject ?? '(No subject)')),
+                'date' => (string)($item->date ?? ''),
+                'seen' => !empty($item->seen),
+            ];
+        }
+        jsonResponse(['ok' => true, 'address' => $access['email_address'], 'messages' => $messages]);
+    } catch (Throwable $error) {
+        error_log('[portal/mail] Inbox read failed: ' . $error->getMessage());
+        jsonResponse(['ok' => false, 'error' => 'Could not read this mailbox right now. Try again or check the IMAP settings.'], 502);
+    } finally {
+        imap_close($mailbox);
+    }
+}
+
+if ($apiPath === '/portal/mail/reply' && $method === 'POST') {
+    header('Cache-Control: no-store, private');
+    header('Pragma: no-cache');
+    if (!empty($portalSession['impersonating'])) jsonResponse(['ok' => false, 'error' => 'Replies can only be sent from the client’s own sign-in.'], 403);
+    $clientId = $portalSession['id'];
+    $uid = (int)($input['uid'] ?? 0);
+    $body = trim((string)($input['body'] ?? ''));
+    if ($uid < 1 || $body === '') jsonResponse(['ok' => false, 'error' => 'Choose an email and write a reply first.'], 422);
+    $stmt = $pdo->prepare('SELECT * FROM client_access_credentials WHERE client_id = ?');
+    $stmt->execute([$clientId]);
+    $access = $stmt->fetch();
+    if (!$access || empty($access['email_address']) || empty($access['email_password_enc'])) jsonResponse(['ok' => false, 'error' => 'Email access has not been configured for this client yet.'], 409);
+    if (!function_exists('imap_open')) jsonResponse(['ok' => false, 'error' => 'The server is missing the PHP IMAP extension required for in-app email.'], 503);
+    $host = trim((string)($access['imap_host'] ?? ''));
+    $port = (int)($access['imap_port'] ?? 993);
+    if (!preg_match('/^[A-Za-z0-9.-]+$/', $host) || $port < 1 || $port > 65535) jsonResponse(['ok' => false, 'error' => 'Incoming email server settings are invalid.'], 503);
+    $tlsMode = $port === 143 ? '/imap/tls' : '/imap/ssl';
+    $mailbox = @imap_open('{' . $host . ':' . $port . $tlsMode . '}INBOX', (string)$access['email_address'], decryptClientSecret($access['email_password_enc']), OP_READONLY, 1, ['DISABLE_AUTHENTICATOR' => 'GSSAPI']);
+    if (!$mailbox) jsonResponse(['ok' => false, 'error' => 'Could not connect to this mailbox to prepare the reply.'], 502);
+    try {
+        $messageNumber = imap_msgno($mailbox, $uid);
+        if ($messageNumber < 1) jsonResponse(['ok' => false, 'error' => 'The original email could not be found.'], 404);
+        $overview = imap_fetch_overview($mailbox, (string)$messageNumber, 0);
+        $item = $overview[0] ?? null;
+        if (!$item) jsonResponse(['ok' => false, 'error' => 'Could not read the original email.'], 502);
+        $from = imap_rfc822_parse_adrlist((string)($item->from ?? ''), '');
+        $recipient = isset($from[0]) ? strtolower((string)($from[0]->mailbox ?? '') . '@' . (string)($from[0]->host ?? '')) : '';
+        $subject = decodeImapHeader((string)($item->subject ?? ''));
+        $messageId = trim((string)($item->message_id ?? ''), "<> \t\n\r\0\x0B");
+        sendClientMailboxReply($access, $recipient, $subject, $body, $messageId);
+        jsonResponse(['ok' => true, 'sent' => true]);
+    } catch (Throwable $error) {
+        error_log('[portal/mail] Reply failed: ' . $error->getMessage());
+        jsonResponse(['ok' => false, 'error' => $error->getMessage()], 502);
+    } finally {
+        imap_close($mailbox);
+    }
+}
+
 if ($apiPath === '/portal/data') {
     $clientId = $_GET['client_id'] ?? '';
     if (!$clientId) {
@@ -1065,7 +1522,7 @@ if ($apiPath === '/portal/data') {
     $stmtP->execute([$clientId]);
     $projects = $stmtP->fetchAll();
 
-    $stmtI = $pdo->prepare("SELECT * FROM client_invoices WHERE client_id = ?");
+    $stmtI = $pdo->prepare("SELECT * FROM client_invoices WHERE client_id = ? AND status <> 'Draft'");
     $stmtI->execute([$clientId]);
     $invoices = $stmtI->fetchAll();
 

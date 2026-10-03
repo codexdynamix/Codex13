@@ -587,6 +587,29 @@ export async function updateClientWorkspaceAdmin(userId, workspace) {
   return data?.workspace || null;
 }
 
+export async function getClientAccessAdmin(clientId) {
+  const data = await adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/access`);
+  return data.access || null;
+}
+
+export async function saveClientAccessAdmin(clientId, access) {
+  return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/access`, {
+    method: 'PUT',
+    body: access,
+  });
+}
+
+export async function getClientAccountingAdmin(clientId) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}`);
+}
+
+export async function saveClientAccountingRecord(clientId, record) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}`, {
+    method: 'POST',
+    body: record,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Admin ↔ Client support chat
 // ---------------------------------------------------------------------------
