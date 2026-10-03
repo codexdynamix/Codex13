@@ -109,21 +109,6 @@ export async function adminLogin(email, password, requestedRole) {
   return data.user;
 }
 
-export async function adminBootstrap({ name, email, password }) {
-  const res = await fetch('/api/admin/bootstrap', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, password }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.ok || !data.user || !data.token) {
-    throw new Error(data.error || 'Could not create the initial administrator account.');
-  }
-  setAdminToken(data.token);
-  setStoredAdminProfile(data.user);
-  return data.user;
-}
-
 /**
  * POST /api/admin/logout
  * Best-effort: tells the backend to clear its admin cookie pair, then wipes

@@ -211,7 +211,7 @@ function normalizeLeadRow(array $lead): array {
 
 $adminSession = null;
 $portalSession = null;
-$isAdminLogin = in_array($apiPath, ['/admin/login', '/admin/bootstrap', '/admin/setup-status'], true);
+$isAdminLogin = $apiPath === '/admin/login';
 $isPortalLogin = $apiPath === '/portal/login';
 if (str_starts_with($apiPath, '/admin/') && !$isAdminLogin) {
     $adminSession = findSession($pdo, 'admin_sessions', 'user_id');
@@ -237,10 +237,6 @@ if ($apiPath === '/healthz') {
         'status' => 'ok',
         'database' => $pdo->getAttribute(PDO::ATTR_DRIVER_NAME),
     ]);
-}
-
-if ($apiPath === '/admin/setup-status' && $method === 'GET') {
-    jsonResponse(['ok' => true, 'setupRequired' => (int)$pdo->query("SELECT COUNT(*) FROM staff_users")->fetchColumn() === 0]);
 }
 
 // -----------------------------------------------------------------------------
@@ -1068,31 +1064,6 @@ if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === '
 // -----------------------------------------------------------------------------
 // 13. AUTHENTICATION: STAFF LOGIN
 // -----------------------------------------------------------------------------
-if ($apiPath === '/admin/bootstrap' && $method === 'POST') {
-    if ((int)$pdo->query("SELECT COUNT(*) FROM staff_users")->fetchColumn() !== 0) {
-        jsonResponse(['ok' => false, 'error' => 'Administrator setup is already complete.'], 409);
-    }
-    $email = strtolower(trim($input['email'] ?? ''));
-    $name = trim($input['name'] ?? '');
-    $password = $input['password'] ?? '';
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || $name === '' || strlen($password) < 12) {
-        jsonResponse(['ok' => false, 'error' => 'Enter a valid email, name, and password of at least 12 characters.'], 400);
-    }
-    $id = 'adm_' . bin2hex(random_bytes(8));
-    $now = date('c');
-    $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'security' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
-    $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, status, capabilities, created_at, last_login_at) VALUES (?, ?, ?, ?, 'Super Admin', 'Active', ?, ?, ?)")
-        ->execute([$id, $email, password_hash($password, PASSWORD_DEFAULT), $name, $caps, $now, $now]);
-    $token = bin2hex(random_bytes(32));
-    $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
-        ->execute([hash('sha256', $token), $id, date('c', time() + 86400 * 14), $now]);
-    jsonResponse(['ok' => true, 'token' => $token, 'user' => [
-        'id' => $id, 'name' => $name, 'email' => $email, 'role' => 'Super Admin',
-        'office_id' => null, 'team_id' => null, 'status' => 'Active',
-        'last_login_at' => $now, 'capabilities' => json_decode($caps, true),
-    ]]);
-}
-
 if ($apiPath === '/admin/me' && $method === 'GET') {
     $stmt = $pdo->prepare("SELECT id, name, email, role, office_id, team_id, status, capabilities, last_login_at FROM staff_users WHERE id = ?");
     $stmt->execute([$adminSession['id']]);

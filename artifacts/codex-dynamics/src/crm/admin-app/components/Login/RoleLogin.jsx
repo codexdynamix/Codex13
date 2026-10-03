@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROLE } from '../../shared';
-import { adminLogin, adminBootstrap, mapAdminToUser, fetchAdminMe } from '../../adminApi';
+import { adminLogin, mapAdminToUser, fetchAdminMe } from '../../adminApi';
 
 const ROLE_PATH = {
   [ROLE.SUPER_ADMIN]:    'super-admin',
@@ -33,26 +33,12 @@ const RoleLogin = ({ role, onAdminLogin }) => {
   const rolePath  = ROLE_PATH[role];
 
   const [email,        setEmail]        = useState('');
-  const [name,         setName]         = useState('');
   const [password,     setPassword]     = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error,        setError]        = useState('');
   const [loading,      setLoading]      = useState(false);
-  const [setupRequired, setSetupRequired] = useState(false);
-  const [setupMode, setSetupMode] = useState(false);
 
   useEffect(() => {
-    if (role === ROLE.SUPER_ADMIN) {
-      fetch('/api/admin/setup-status')
-        .then((response) => response.json())
-        .then((data) => {
-          if (data?.ok && data.setupRequired) {
-            setSetupRequired(true);
-            setSetupMode(true);
-          }
-        })
-        .catch(() => {});
-    }
     fetchAdminMe()
       .then((admin) => {
         if (admin?.role === role && admin.id) navigate(`/admin/${rolePath}/${admin.id}`, { replace: true });
@@ -67,9 +53,7 @@ const RoleLogin = ({ role, onAdminLogin }) => {
     setLoading(true);
 
     try {
-      const admin = setupMode
-        ? await adminBootstrap({ name: name.trim(), email: email.trim(), password })
-        : await adminLogin(email.trim(), password, role);
+      const admin = await adminLogin(email.trim(), password, role);
 
       if (admin.role !== role) {
         setError(`This account has the ${admin.role} role. Please use the correct login page.`);
@@ -100,7 +84,7 @@ const RoleLogin = ({ role, onAdminLogin }) => {
 
         <div style={{ textAlign: 'center', marginBottom: '20px' }}>
           <h1 style={{ color: THEME.text, fontSize: '1.5rem', fontWeight: 700, margin: 0 }}>
-            {setupMode ? 'Create the First Administrator' : `${meta.title} Login`}
+            {`${meta.title} Login`}
           </h1>
         </div>
 
@@ -124,29 +108,6 @@ const RoleLogin = ({ role, onAdminLogin }) => {
           )}
 
           <form onSubmit={handleSubmit}>
-            {setupMode && (
-              <div style={{ marginBottom: '18px' }}>
-                <label style={{
-                  display: 'block', color: THEME.muted, fontSize: '0.78rem',
-                  fontWeight: 600, marginBottom: '8px', letterSpacing: '0.05em',
-                  textTransform: 'uppercase',
-                }}>
-                  Administrator Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                  autoComplete="name"
-                  style={{
-                    width: '100%', background: THEME.surface, border: `1px solid ${THEME.border}`,
-                    borderRadius: '8px', padding: '12px 14px', color: THEME.text,
-                    fontSize: '0.95rem', outline: 'none', boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-            )}
             <div style={{ marginBottom: '18px' }}>
               <label style={{
                 display: 'block', color: THEME.muted, fontSize: '0.78rem',
@@ -180,17 +141,16 @@ const RoleLogin = ({ role, onAdminLogin }) => {
                 fontWeight: 600, marginBottom: '8px', letterSpacing: '0.05em',
                 textTransform: 'uppercase',
               }}>
-                Password{setupMode ? ' (at least 12 characters)' : ''}
+                Password
               </label>
               <div style={{ position: 'relative' }}>
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                  placeholder={setupMode ? 'Choose a strong password' : 'Enter your password'}
+                  placeholder="Enter your password"
                   required
-                  minLength={setupMode ? 12 : undefined}
-                  autoComplete={setupMode ? 'new-password' : 'current-password'}
+                  autoComplete="current-password"
                   style={{
                     width: '100%', background: THEME.surface, border: `1px solid ${THEME.border}`,
                     borderRadius: '8px', padding: '12px 44px 12px 14px', color: THEME.text,
@@ -249,19 +209,10 @@ const RoleLogin = ({ role, onAdminLogin }) => {
                 letterSpacing: '0.02em',
               }}
             >
-              {loading ? 'Please wait...' : setupMode ? 'Create Administrator' : 'Sign In'}
+              {loading ? 'Please wait...' : 'Sign In'}
             </button>
           </form>
 
-          {setupRequired && !setupMode && role === ROLE.SUPER_ADMIN && (
-            <button
-              type="button"
-              onClick={() => setSetupMode(true)}
-              style={{ width: '100%', marginTop: '14px', color: THEME.accent, background: 'transparent', border: 'none', cursor: 'pointer' }}
-            >
-              Set up the first administrator
-            </button>
-          )}
         </div>
 
         <p style={{ color: THEME.muted, fontSize: '0.85rem', margin: '16px 0 0', textAlign: 'center' }}>
