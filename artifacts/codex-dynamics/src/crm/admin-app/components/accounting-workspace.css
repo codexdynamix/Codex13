@@ -159,10 +159,49 @@
 .crm-admin-app .aw-close-button { border-color: var(--aw-border); background: var(--aw-base); }
 .crm-admin-app .aw-drawer-content { flex: 1; overflow: auto; padding: 20px; }
 .crm-admin-app .aw-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.crm-admin-app .aw-ledger-heading { align-items: flex-start; }
+.crm-admin-app .aw-ledger-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 7px; }
+.crm-admin-app .aw-ledger-tools .aw-filter { gap: 5px; }
+.crm-admin-app .aw-ledger-tools .aw-filter select { min-width: 98px; }
+.crm-admin-app .aw-ledger-tools .aw-button { min-height: 31px; padding: 0 8px; font-size: 10px; }
+.crm-admin-app .aw-record-service { color: #8da9c8; background: rgba(141,169,200,.1); }
+.crm-admin-app .aw-record-renewal { color: var(--aw-amber); background: color-mix(in srgb, var(--aw-amber) 8%, var(--aw-surface)); }
+.crm-admin-app .aw-button-primary { border-color: color-mix(in srgb, var(--aw-accent) 72%, var(--aw-border)); background: var(--aw-accent); color: var(--aw-accent-ink) !important; }
+.crm-admin-app .aw-button-primary:hover { background: color-mix(in srgb, var(--aw-accent) 88%, white); }
+.crm-admin-app .aw-due-heading { align-items: center; }
+.crm-admin-app .aw-due-heading .aw-button { flex: 0 0 auto; }
+.crm-admin-app .aw-batch-select { display: inline-flex; align-items: center; justify-content: center; margin-right: 6px; vertical-align: middle; }
+.crm-admin-app .aw-batch-select input, .crm-admin-app .aw-batch-item input { accent-color: var(--aw-accent); width: 15px; height: 15px; }
+.crm-admin-app .aw-unpriced { color: var(--aw-muted); font-family: var(--font-family-base, sans-serif); font-size: 10px; font-weight: 500; }
+.crm-admin-app .aw-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 17px; border-top: 1px solid var(--aw-border); color: var(--aw-muted); font-size: 10px; }
+.crm-admin-app .aw-pagination > div { display: flex; align-items: center; gap: 10px; }
+.crm-admin-app .aw-pagination .aw-button { min-height: 30px; padding: 0 8px; font-size: 10px; }
+.crm-admin-app .aw-pagination .aw-button:disabled { opacity: .45; }
+.crm-admin-app .aw-batch-backdrop { align-items: center; justify-content: center; padding: 20px; }
+.crm-admin-app .aw-batch-dialog { width: min(640px, 100%); max-height: min(85vh, 760px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--aw-border); border-radius: 10px; background: var(--aw-base); box-shadow: 0 22px 70px rgba(0,0,0,.42); }
+.crm-admin-app .aw-batch-header { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 20px 14px; border-bottom: 1px solid var(--aw-border); background: var(--aw-surface); }
+.crm-admin-app .aw-batch-header h2 { margin-top: 4px; font-size: 17px; letter-spacing: -.025em; }
+.crm-admin-app .aw-batch-intro { margin: 0; padding: 14px 20px; color: var(--aw-muted); font-size: 11px; line-height: 1.5; }
+.crm-admin-app .aw-batch-list { flex: 1; overflow: auto; padding: 0 20px; }
+.crm-admin-app .aw-batch-item { min-height: 57px; display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 10px; border-top: 1px solid var(--aw-border); cursor: pointer; }
+.crm-admin-app .aw-batch-item-main { min-width: 0; }
+.crm-admin-app .aw-batch-item-main strong, .crm-admin-app .aw-batch-item-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crm-admin-app .aw-batch-item-main strong { font-size: 11px; }
+.crm-admin-app .aw-batch-item-main small { margin-top: 3px; color: var(--aw-muted); font-size: 9px; }
+.crm-admin-app .aw-batch-item-amount { font-family: var(--font-family-mono, monospace); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.crm-admin-app .aw-batch-total { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 20px; border-top: 1px solid var(--aw-border); color: var(--aw-muted); font-size: 10px; }
+.crm-admin-app .aw-batch-total > div { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.crm-admin-app .aw-batch-total strong { color: var(--aw-text); font-family: var(--font-family-mono, monospace); font-size: 11px; }
+.crm-admin-app .aw-batch-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 20px 17px; border-top: 1px solid var(--aw-border); }
+.crm-admin-app .aw-asset-date strong, .crm-admin-app .aw-asset-date small { display: block; }
+.crm-admin-app .aw-asset-date strong { color: var(--aw-text); font-size: 9px; font-weight: 550; }
+.crm-admin-app .aw-asset-date small { margin-top: 3px; color: var(--aw-muted); font-size: 8px; line-height: 1.35; }
 
 @media (max-width: 900px) {
   .crm-admin-app .aw-summary-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .crm-admin-app .aw-client-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .crm-admin-app .aw-ledger-heading { align-items: flex-start; flex-direction: column; }
+  .crm-admin-app .aw-ledger-tools { justify-content: flex-start; }
 }
 @media (max-width: 640px) {
   .crm-admin-app .accounting-workspace { padding: 17px 12px 20px; }
@@ -179,6 +218,11 @@
   .crm-admin-app .aw-search { width: 100%; }
   .crm-admin-app .aw-section-heading { align-items: flex-start; flex-direction: column; padding: 14px 12px 11px; }
   .crm-admin-app .aw-section-heading:has(.aw-filter) { flex-direction: row; align-items: center; }
+  .crm-admin-app .aw-ledger-heading, .crm-admin-app .aw-due-heading { align-items: flex-start !important; flex-direction: column !important; }
+  .crm-admin-app .aw-ledger-tools { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: stretch; }
+  .crm-admin-app .aw-ledger-tools .aw-filter { min-width: 0; display: grid; gap: 4px; }
+  .crm-admin-app .aw-ledger-tools .aw-filter select { width: 100%; min-width: 0; }
+  .crm-admin-app .aw-ledger-tools .aw-button { justify-content: center; }
   .crm-admin-app .aw-filter { align-items: flex-end; flex-direction: column; gap: 4px; }
   .crm-admin-app .aw-filter select { min-width: 112px; }
   .crm-admin-app .aw-table { min-width: 680px; }
@@ -190,6 +234,13 @@
   .crm-admin-app .aw-asset-row .aw-status { display: none; }
   .crm-admin-app .aw-asset-row .aw-row-action { grid-column: 2 / 4; justify-self: start; }
   .crm-admin-app .aw-footer { flex-direction: column; gap: 3px; }
+  .crm-admin-app .aw-pagination { align-items: flex-start; flex-direction: column; padding: 10px 12px; }
+  .crm-admin-app .aw-pagination > div { width: 100%; justify-content: space-between; }
+  .crm-admin-app .aw-batch-backdrop { padding: 10px; }
+  .crm-admin-app .aw-batch-dialog { max-height: 92vh; }
+  .crm-admin-app .aw-batch-header, .crm-admin-app .aw-batch-intro, .crm-admin-app .aw-batch-list, .crm-admin-app .aw-batch-total, .crm-admin-app .aw-batch-actions { padding-right: 13px; padding-left: 13px; }
+  .crm-admin-app .aw-batch-total { align-items: flex-start; flex-direction: column; }
+  .crm-admin-app .aw-batch-total > div { justify-content: flex-start; }
   .crm-admin-app .aw-drawer { width: 100%; }
   .crm-admin-app .aw-drawer-header { padding: 15px 14px 12px; }
   .crm-admin-app .aw-drawer-content { padding: 14px 12px; }

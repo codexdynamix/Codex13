@@ -74,6 +74,25 @@ function getDb(): PDO {
     return $pdo;
 }
 
+function ensureDatabaseColumn(PDO $pdo, string $table, string $column, string $definition): void {
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $column)) {
+        throw new InvalidArgumentException('Invalid schema identifier.');
+    }
+
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $columns = array_column($pdo->query("PRAGMA table_info(`{$table}`)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array($column, $columns, true)) {
+            $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+        }
+        return;
+    }
+
+    $stmt = $pdo->query("SHOW COLUMNS FROM `{$table}` LIKE " . $pdo->quote($column));
+    if (!$stmt->fetch()) {
+        $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+    }
+}
+
 function initSchema(PDO $pdo): void {
     // 1. Leads Table
     $pdo->exec("
@@ -354,6 +373,9 @@ function initSchema(PDO $pdo): void {
         $currencyColumn = $pdo->query("SHOW COLUMNS FROM client_payments LIKE 'currency'")->fetch();
         if (!$currencyColumn) $pdo->exec("ALTER TABLE client_payments ADD COLUMN currency VARCHAR(3) DEFAULT 'USD'");
     }
+    ensureDatabaseColumn($pdo, 'client_payments', 'void_reason', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'client_payments', 'voided_by', 'VARCHAR(191) NULL');
+    ensureDatabaseColumn($pdo, 'client_payments', 'voided_at', 'TEXT NULL');
 
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS client_recurring_services (
@@ -417,12 +439,14 @@ function initSchema(PDO $pdo): void {
             renewal_date TEXT,
             billing_frequency TEXT DEFAULT 'Monthly',
             amount REAL DEFAULT 0,
+            currency VARCHAR(3) DEFAULT 'USD',
             auto_renew INTEGER DEFAULT 1,
             server_region TEXT,
             ip_address TEXT,
             uptime TEXT DEFAULT '99.99%'
         );
     ");
+    ensureDatabaseColumn($pdo, 'client_hosting', 'currency', "VARCHAR(3) DEFAULT 'USD'");
 
     // 16. Client Domains Table
     $pdo->exec("
@@ -433,6 +457,8 @@ function initSchema(PDO $pdo): void {
             registrar TEXT DEFAULT 'Codex Managed',
             registration_date TEXT,
             expiration_date TEXT,
+            renewal_amount DECIMAL(12,2) NULL,
+            currency VARCHAR(3) DEFAULT 'USD',
             renewal_status TEXT DEFAULT 'Auto-Renew Active',
             auto_renew INTEGER DEFAULT 1,
             dns_management INTEGER DEFAULT 1,
@@ -440,6 +466,8 @@ function initSchema(PDO $pdo): void {
             records TEXT
         );
     ");
+    ensureDatabaseColumn($pdo, 'client_domains', 'renewal_amount', 'DECIMAL(12,2) NULL');
+    ensureDatabaseColumn($pdo, 'client_domains', 'currency', "VARCHAR(3) DEFAULT 'USD'");
 
     // 17. Client Support Tickets Table
     $pdo->exec("

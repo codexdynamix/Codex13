@@ -610,6 +610,27 @@ export async function getAdminAccountingOverview() {
   return adminFetch('/api/admin/accounting/overview');
 }
 
+export async function voidClientAccountingPayment(clientId, paymentId, reason) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/payments/${encodeURIComponent(paymentId)}/void`, {
+    method: 'POST',
+    body: { reason },
+  });
+}
+
+export async function updateClientAccountingAsset(clientId, assetType, assetId, pricing) {
+  return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/assets/${encodeURIComponent(assetType)}/${encodeURIComponent(assetId)}`, {
+    method: 'PUT',
+    body: pricing,
+  });
+}
+
+export async function invoiceDueRecurringServices(serviceIds) {
+  return adminFetch('/api/admin/accounting/recurring/invoice-due', {
+    method: 'POST',
+    body: { serviceIds },
+  });
+}
+
 export async function createClientRecurringService(clientId, service) {
   return adminFetch(`/api/admin/accounting/${encodeURIComponent(clientId)}/services`, {
     method: 'POST',

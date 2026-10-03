@@ -20,5 +20,9 @@
   "devDependencies": {
     "prettier": "^3.9.6",
     "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "@replit/vite-plugin-cartographer": "^0.6.1",
+    "@replit/vite-plugin-runtime-error-modal": "^0.0.6"
   }
 }

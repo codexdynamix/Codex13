@@ -252,6 +252,59 @@ function nextRecurringBillingDate(string $date, string $frequency): string {
     return $target->setDate((int)$target->format('Y'), (int)$target->format('n'), $targetDay)->format('Y-m-d');
 }
 
+class AccountingActionException extends RuntimeException {}
+
+function createRecurringInvoice(PDO $pdo, string $clientId, string $serviceId, bool $mustBeDue = false): array {
+    $serviceStmt = $pdo->prepare('SELECT * FROM client_recurring_services WHERE id = ? AND client_id = ?');
+    $serviceStmt->execute([$serviceId, $clientId]);
+    $service = $serviceStmt->fetch();
+    if (!$service || strtolower(trim((string)$service['status'])) !== 'active') {
+        throw new AccountingActionException('Only an active recurring service can be invoiced.', 409);
+    }
+
+    $cycleStart = (string)$service['next_due_date'];
+    if ($mustBeDue && $cycleStart > date('Y-m-d')) {
+        throw new AccountingActionException('A selected service is not due yet. Refresh the due-work list and review the batch again.', 409);
+    }
+    $nextDueDate = nextRecurringBillingDate($cycleStart, (string)$service['billing_frequency']);
+    $cycleEnd = DateTimeImmutable::createFromFormat('!Y-m-d', $nextDueDate)->modify('-1 day')->format('Y-m-d');
+    $updated = $pdo->prepare("UPDATE client_recurring_services SET next_due_date = ?, updated_at = ? WHERE id = ? AND client_id = ? AND next_due_date = ? AND status = 'Active'");
+    $updated->execute([$nextDueDate, date('c'), $serviceId, $clientId, $cycleStart]);
+    if ($updated->rowCount() !== 1) {
+        throw new AccountingActionException('This service was just invoiced or changed. Refresh the ledger and try again.', 409);
+    }
+
+    $amount = round((float)$service['amount'], 2);
+    $invoiceId = 'inv_' . bin2hex(random_bytes(8));
+    $invoiceNumber = 'INV-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+    $issueDate = date('Y-m-d');
+    $lineItems = [[
+        'description' => trim((string)$service['service_name']) . ' · ' . $cycleStart . ' to ' . $cycleEnd,
+        'service' => (string)$service['service_type'],
+        'quantity' => 1,
+        'unitPrice' => $amount,
+        'total' => $amount,
+        'recurringServiceId' => $serviceId,
+    ]];
+    $notes = 'Recurring service billing cycle: ' . $cycleStart . ' to ' . $cycleEnd . '.';
+    $pdo->prepare("
+        INSERT INTO client_invoices
+            (id, client_id, invoice_number, issue_date, due_date, status, currency, subtotal, tax, total, amount_paid, balance_due, line_items, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, 'Pending', ?, ?, 0, ?, 0, ?, ?, ?, ?)
+    ")->execute([$invoiceId, $clientId, $invoiceNumber, $issueDate, $cycleStart, $service['currency'], $amount, $amount, $amount, json_encode($lineItems, JSON_UNESCAPED_UNICODE), $notes, date('c')]);
+
+    return [
+        'invoiceId' => $invoiceId,
+        'invoiceNumber' => $invoiceNumber,
+        'amount' => $amount,
+        'currency' => $service['currency'],
+        'nextDueDate' => $nextDueDate,
+        'clientId' => $clientId,
+        'serviceId' => $serviceId,
+        'serviceName' => $service['service_name'],
+    ];
+}
+
 function loadClientIdentifierSets(PDO $pdo): array {
     $emails = [];
     $phones = [];
@@ -1701,6 +1754,163 @@ if ($apiPath === '/admin/accounting/overview') {
     ]);
 }
 
+$isAccountingPaymentVoid = preg_match('#^/admin/accounting/([^/]+)/payments/([^/]+)/void$#', $apiPath, $accountingPaymentVoidMatch) === 1;
+if ($isAccountingPaymentVoid) {
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $clientId = rawurldecode($accountingPaymentVoidMatch[1]);
+    $paymentId = rawurldecode($accountingPaymentVoidMatch[2]);
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', true);
+
+    $reason = trim((string)($input['reason'] ?? ''));
+    if (strlen($reason) < 5 || strlen($reason) > 500) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a void reason between 5 and 500 characters.'], 422);
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $paymentStmt = $pdo->prepare('SELECT * FROM client_payments WHERE id = ? AND client_id = ?');
+        $paymentStmt->execute([$paymentId, $clientId]);
+        $payment = $paymentStmt->fetch();
+        if (!$payment) {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'Payment receipt not found.'], 404);
+        }
+        $paymentStatus = strtolower(trim((string)($payment['status'] ?? '')));
+        if ($paymentStatus === 'voided') {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'This payment has already been voided.'], 409);
+        }
+        if (!in_array($paymentStatus, ['completed', 'received', 'paid', 'partially paid'], true)) {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'Only a completed payment can be voided.'], 409);
+        }
+
+        $voidedAt = date('c');
+        $voidUpdate = $pdo->prepare("UPDATE client_payments SET status = 'Voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND client_id = ? AND LOWER(COALESCE(status, '')) IN ('completed', 'received', 'paid', 'partially paid')");
+        $voidUpdate->execute([$reason, $adminSession['id'], $voidedAt, $paymentId, $clientId]);
+        if ($voidUpdate->rowCount() !== 1) {
+            $pdo->rollBack();
+            jsonResponse(['ok' => false, 'error' => 'This receipt was changed by another user. Refresh the ledger before trying again.'], 409);
+        }
+
+        if (!empty($payment['invoice_id'])) {
+            $invoiceStmt = $pdo->prepare('SELECT * FROM client_invoices WHERE id = ? AND client_id = ?');
+            $invoiceStmt->execute([$payment['invoice_id'], $clientId]);
+            $invoice = $invoiceStmt->fetch();
+            if ($invoice) {
+                $paidStmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM client_payments WHERE invoice_id = ? AND client_id = ? AND LOWER(COALESCE(status, '')) <> 'voided'");
+                $paidStmt->execute([$payment['invoice_id'], $clientId]);
+                $amountPaid = round((float)$paidStmt->fetchColumn(), 2);
+                $balanceDue = round(max(0, (float)$invoice['total'] - $amountPaid), 2);
+                $invoiceStatus = $balanceDue <= 0 ? 'Paid' : ($amountPaid > 0 ? 'Partially Paid' : 'Pending');
+                $paidDate = $balanceDue <= 0 ? ($invoice['paid_date'] ?: $payment['payment_date']) : null;
+                $pdo->prepare('UPDATE client_invoices SET amount_paid = ?, balance_due = ?, status = ?, paid_date = ? WHERE id = ? AND client_id = ?')
+                    ->execute([$amountPaid, $balanceDue, $invoiceStatus, $paidDate, $payment['invoice_id'], $clientId]);
+            }
+        }
+
+        $details = json_encode([
+            'paymentId' => $paymentId,
+            'receiptNumber' => $payment['receipt_number'],
+            'invoiceId' => $payment['invoice_id'],
+            'amount' => (float)$payment['amount'],
+            'currency' => $payment['currency'] ?? 'USD',
+            'reason' => $reason,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $pdo->prepare('INSERT INTO audit_logs (id, user_id, client_name, action, details, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            ->execute([
+                'aud_' . bin2hex(random_bytes(8)),
+                $adminSession['id'],
+                $clientId,
+                'ACCOUNTING_PAYMENT_VOIDED',
+                $details,
+                $_SERVER['REMOTE_ADDR'] ?? '',
+                $voidedAt,
+            ]);
+        $pdo->commit();
+        jsonResponse(['ok' => true, 'paymentId' => $paymentId, 'status' => 'Voided', 'voidedAt' => $voidedAt]);
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+}
+
+$accountingAssetMatch = [];
+if (preg_match('#^/admin/accounting/([^/]+)/assets/(hosting|domain)/([^/]+)$#', $apiPath, $accountingAssetMatch)) {
+    if ($method !== 'PUT') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $clientId = rawurldecode($accountingAssetMatch[1]);
+    $assetType = $accountingAssetMatch[2];
+    $assetId = rawurldecode($accountingAssetMatch[3]);
+    requireClientProfileSectionAccess($pdo, $adminSession, $clientId, 'accounting', true);
+
+    $amountKey = $assetType === 'hosting' ? 'amount' : 'renewalAmount';
+    $rawAmount = $input[$amountKey] ?? null;
+    $amount = $rawAmount === null || $rawAmount === '' ? null : (is_numeric($rawAmount) ? round((float)$rawAmount, 2) : false);
+    $currency = strtoupper(trim((string)($input['currency'] ?? 'USD')));
+    if ($amount === false || ($amount !== null && ($amount < 0 || $amount > 100000000)) || !preg_match('/^[A-Z]{3}$/', $currency)) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a non-negative renewal amount and a valid three-letter currency code.'], 422);
+    }
+    if ($assetType === 'hosting' && $amount === null) {
+        jsonResponse(['ok' => false, 'error' => 'Hosting renewal amount cannot be blank. Use 0 when the price is unknown.'], 422);
+    }
+
+    $table = $assetType === 'hosting' ? 'client_hosting' : 'client_domains';
+    $exists = $pdo->prepare("SELECT id FROM {$table} WHERE id = ? AND client_id = ?");
+    $exists->execute([$assetId, $clientId]);
+    if (!$exists->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Tracked service not found.'], 404);
+
+    if ($assetType === 'hosting') {
+        $pdo->prepare('UPDATE client_hosting SET amount = ?, currency = ? WHERE id = ? AND client_id = ?')
+            ->execute([$amount, $currency, $assetId, $clientId]);
+    } else {
+        $pdo->prepare('UPDATE client_domains SET renewal_amount = ?, currency = ? WHERE id = ? AND client_id = ?')
+            ->execute([$amount, $currency, $assetId, $clientId]);
+    }
+    jsonResponse(['ok' => true, 'saved' => true]);
+}
+
+$isAccountingBatchInvoice = $apiPath === '/admin/accounting/recurring/invoice-due';
+if ($isAccountingBatchInvoice) {
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    requireSuperAdmin($pdo, $adminSession);
+    $serviceIds = $input['serviceIds'] ?? null;
+    if (!is_array($serviceIds) || count($serviceIds) < 1 || count($serviceIds) > 100) {
+        jsonResponse(['ok' => false, 'error' => 'Select between 1 and 100 recurring services to invoice.'], 422);
+    }
+    $normalizedIds = [];
+    foreach ($serviceIds as $serviceId) {
+        if (!is_string($serviceId) || trim($serviceId) === '') {
+            jsonResponse(['ok' => false, 'error' => 'The recurring service selection is invalid.'], 422);
+        }
+        $normalizedIds[] = trim($serviceId);
+    }
+    if (count(array_unique($normalizedIds)) !== count($normalizedIds)) {
+        jsonResponse(['ok' => false, 'error' => 'The recurring service selection contains duplicates. Refresh the due-work list and try again.'], 422);
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $invoices = [];
+        foreach ($normalizedIds as $serviceId) {
+            $clientStmt = $pdo->prepare('SELECT client_id FROM client_recurring_services WHERE id = ?');
+            $clientStmt->execute([$serviceId]);
+            $clientId = (string)($clientStmt->fetchColumn() ?: '');
+            if ($clientId === '') {
+                throw new AccountingActionException('A selected recurring service no longer exists. Refresh the due-work list and try again.', 409);
+            }
+            $invoices[] = createRecurringInvoice($pdo, $clientId, $serviceId, true);
+        }
+        $pdo->commit();
+        jsonResponse(['ok' => true, 'invoices' => $invoices, 'count' => count($invoices)]);
+    } catch (AccountingActionException $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        jsonResponse(['ok' => false, 'error' => $error->getMessage()], $error->getCode() ?: 409);
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+}
+
 $accountingServiceInvoiceMatch = [];
 $accountingServiceResourceMatch = [];
 $accountingServiceCollectionMatch = [];
@@ -1796,51 +2006,12 @@ if ($isAccountingServiceInvoice || $isAccountingServiceResource || $isAccounting
     if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     $pdo->beginTransaction();
     try {
-        $serviceStmt = $pdo->prepare('SELECT * FROM client_recurring_services WHERE id = ? AND client_id = ?');
-        $serviceStmt->execute([$serviceId, $clientId]);
-        $service = $serviceStmt->fetch();
-        if (!$service || $service['status'] !== 'Active') {
-            $pdo->rollBack();
-            jsonResponse(['ok' => false, 'error' => 'Only an active recurring service can be invoiced.'], 409);
-        }
-
-        $cycleStart = (string)$service['next_due_date'];
-        $nextDueDate = nextRecurringBillingDate($cycleStart, (string)$service['billing_frequency']);
-        $cycleEnd = DateTimeImmutable::createFromFormat('!Y-m-d', $nextDueDate)->modify('-1 day')->format('Y-m-d');
-        $updated = $pdo->prepare("UPDATE client_recurring_services SET next_due_date = ?, updated_at = ? WHERE id = ? AND client_id = ? AND next_due_date = ? AND status = 'Active'");
-        $updated->execute([$nextDueDate, date('c'), $serviceId, $clientId, $cycleStart]);
-        if ($updated->rowCount() !== 1) {
-            $pdo->rollBack();
-            jsonResponse(['ok' => false, 'error' => 'This service was just invoiced or changed. Refresh the ledger and try again.'], 409);
-        }
-
-        $amount = round((float)$service['amount'], 2);
-        $invoiceId = 'inv_' . bin2hex(random_bytes(8));
-        $invoiceNumber = 'INV-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
-        $issueDate = date('Y-m-d');
-        $lineItems = [[
-            'description' => trim((string)$service['service_name']) . ' · ' . $cycleStart . ' to ' . $cycleEnd,
-            'service' => (string)$service['service_type'],
-            'quantity' => 1,
-            'unitPrice' => $amount,
-            'total' => $amount,
-            'recurringServiceId' => $serviceId,
-        ]];
-        $notes = 'Recurring service billing cycle: ' . $cycleStart . ' to ' . $cycleEnd . '.';
-        $pdo->prepare("
-            INSERT INTO client_invoices
-                (id, client_id, invoice_number, issue_date, due_date, status, currency, subtotal, tax, total, amount_paid, balance_due, line_items, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, 'Pending', ?, ?, 0, ?, 0, ?, ?, ?, ?)
-        ")->execute([$invoiceId, $clientId, $invoiceNumber, $issueDate, $cycleStart, $service['currency'], $amount, $amount, $amount, json_encode($lineItems, JSON_UNESCAPED_UNICODE), $notes, date('c')]);
+        $invoice = createRecurringInvoice($pdo, $clientId, $serviceId);
         $pdo->commit();
-        jsonResponse([
-            'ok' => true,
-            'invoiceId' => $invoiceId,
-            'invoiceNumber' => $invoiceNumber,
-            'amount' => $amount,
-            'currency' => $service['currency'],
-            'nextDueDate' => $nextDueDate,
-        ]);
+        jsonResponse(['ok' => true, ...$invoice]);
+    } catch (AccountingActionException $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        jsonResponse(['ok' => false, 'error' => $error->getMessage()], $error->getCode() ?: 409);
     } catch (Throwable $error) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $error;
@@ -1857,9 +2028,9 @@ if (preg_match('#^/admin/accounting/([^/]+)$#', $apiPath, $accountingMatch)) {
         $payments->execute([$clientId]);
         $recurringServices = $pdo->prepare('SELECT * FROM client_recurring_services WHERE client_id = ? ORDER BY next_due_date ASC, service_name ASC');
         $recurringServices->execute([$clientId]);
-        $hosting = $pdo->prepare('SELECT website_name, provider, plan, status, billing_frequency, amount, renewal_date FROM client_hosting WHERE client_id = ?');
+        $hosting = $pdo->prepare('SELECT id, website_name, provider, plan, status, billing_frequency, amount, currency, renewal_date FROM client_hosting WHERE client_id = ?');
         $hosting->execute([$clientId]);
-        $domains = $pdo->prepare('SELECT domain_name, registrar, expiration_date, renewal_status FROM client_domains WHERE client_id = ?');
+        $domains = $pdo->prepare('SELECT id, domain_name, registrar, expiration_date, renewal_amount, currency, renewal_status FROM client_domains WHERE client_id = ?');
         $domains->execute([$clientId]);
         jsonResponse(['ok' => true, 'invoices' => $invoices->fetchAll(), 'payments' => $payments->fetchAll(), 'recurringServices' => $recurringServices->fetchAll(), 'hosting' => $hosting->fetchAll(), 'domains' => $domains->fetchAll()]);
     }
