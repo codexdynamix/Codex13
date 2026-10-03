@@ -9,11 +9,14 @@ import {
 import { useConfirmDialog } from '../components/ConfirmModal/ConfirmModal';
 import { SearchAutocomplete } from '../components/UserChrome.jsx';
 import { searchAdminLeads } from '../adminApi';
-import { getAdminMessages, sendAdminMessage, markAdminMessagesRead, getAdminUnreadMessageCounts, deleteAdminMessage, clearAdminChat, adminSetClientPassword, deleteLeadCommentApi, deleteLeadStatusEntryApi, getLeadNotificationsAsAdmin, fetchLeadById, postAdminPresence, getAdminMessageAttachmentUrl, getStaffCapabilities, fetchAdminMe, updateLeadApi } from '../adminApi';
+import { getAdminMessages, sendAdminMessage, markAdminMessagesRead, getAdminUnreadMessageCounts, deleteAdminMessage, clearAdminChat, adminSetClientPassword, deleteLeadCommentApi, deleteLeadStatusEntryApi, getLeadNotificationsAsAdmin, fetchLeadById, postAdminPresence, getAdminMessageAttachmentUrl, getStaffCapabilities, fetchAdminMe, updateLeadApi, getClientProfilePermissionsAdmin } from '../adminApi';
 import AdminNotificationsInbox from '../components/AdminNotificationsInbox/AdminNotificationsInbox.jsx';
 import ReactCapabilityWorkspace from '../components/ReactCapabilityWorkspace.jsx';
 import { getLeadProfilePath, getRoleScopedLeads, getRoleWorkspacePath } from '../leadProfileRouting';
 import { portalDb } from '../../../services/portalDatabase';
+import ClientAccessEditor from '../components/ClientAccessEditor.jsx';
+import ClientAccountingPanel from '../components/ClientAccountingPanel.jsx';
+import ClientProfilePermissionManager from '../components/ClientProfilePermissionManager.jsx';
 
 // macOS-style funnel filter button + popover for column header filters.
 function FilterPopover({ label, value, options, open, onToggle, onSelect, onClose, formatLabel }) {
@@ -591,11 +594,18 @@ function AgentPanel({ data, currentUser, setData, setUserLoginState, createLead,
 function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification }) {
   const { leadId } = useParams();
   const currentUser = viewingUser;
+  const isSuperAdmin = currentUser?.role === ROLE.SUPER_ADMIN;
   const navigate = useNavigate();
   const [confirmDialog, confirm] = useConfirmDialog();
   const workspacePath = getRoleWorkspacePath(role, currentUser?.id);
   const visibleLeads = getRoleScopedLeads(data, role, currentUser);
   const lead = visibleLeads.find((l) => l.id === leadId);
+  const [profileSectionPermissions, setProfileSectionPermissions] = useState({});
+  const [profilePermissionsError, setProfilePermissionsError] = useState('');
+  const canReadAccessSection = isSuperAdmin || ['read', 'edit'].includes(profileSectionPermissions.access);
+  const canEditAccessSection = isSuperAdmin || profileSectionPermissions.access === 'edit';
+  const canReadAccountingSection = isSuperAdmin || ['read', 'edit'].includes(profileSectionPermissions.accounting);
+  const canEditAccountingSection = isSuperAdmin || profileSectionPermissions.accounting === 'edit';
   const [status, setStatus] = useState(normalizeStage(lead?.stage || 'New'));
   const [comment, setComment] = useState(lead?.comment || '');
   const [passwordInput, setPasswordInput] = useState('');
@@ -627,6 +637,24 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
       setRegisteredDateInput(reg);
     }
   }, [lead?.id, lead?.registeredDate, lead?.createdAt]);
+
+  useEffect(() => {
+    let active = true;
+    setProfileSectionPermissions({});
+    setProfilePermissionsError('');
+    if (!lead?.id || !currentUser?.id || isSuperAdmin) {
+      return () => { active = false; };
+    }
+
+    getClientProfilePermissionsAdmin(lead.id)
+      .then((result) => {
+        if (active) setProfileSectionPermissions(result.myPermissions || {});
+      })
+      .catch(() => {
+        if (active) setProfilePermissionsError('Could not verify access to this client’s account sections. They remain hidden until access can be checked.');
+      });
+    return () => { active = false; };
+  }, [lead?.id, currentUser?.id, isSuperAdmin]);
 
   const displayRegisteredDate = (() => {
     const raw = lead?.registeredDate || lead?.registered_date || lead?.createdAt || lead?.created_at;
@@ -867,8 +895,6 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
   };
 
   const actorName = currentUser?.name || 'Unknown';
-  const isSuperAdmin = currentUser?.role === ROLE.SUPER_ADMIN;
-
   const handleAddComment = () => {
     if (!comment.trim()) return;
     updateLead(lead.id, { comment: comment.trim(), lastCommentDate: new Date().toISOString().slice(0, 10), _actorName: actorName, _actorId: currentUser?.id });
@@ -1195,6 +1221,33 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
             {lead.notes}
           </div>
         </div>
+      )}
+
+      {profilePermissionsError && !isSuperAdmin && (
+        <div role="alert" style={{ background: '#2B2F38', border: '1px solid rgba(255, 113, 107, 0.35)', borderRadius: 10, padding: 14, margin: '0 0 18px', color: '#ff716b', fontSize: 12 }}>
+          {profilePermissionsError}
+        </div>
+      )}
+
+      {(canReadAccessSection || canReadAccountingSection || isSuperAdmin) && (
+        <section aria-label="Client account sections" style={{ display: 'grid', gap: 16, margin: '22px 0' }}>
+          <h3 style={{ margin: 0, color: 'var(--crm-text-primary)' }}>Client Account</h3>
+          {canReadAccessSection && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border)', borderRadius: 12, padding: 18 }}>
+              <ClientAccessEditor clientId={lead.id} showNotification={showNotification} canEdit={canEditAccessSection} />
+            </div>
+          )}
+          {canReadAccountingSection && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border)', borderRadius: 12, padding: 18 }}>
+              <ClientAccountingPanel clientId={lead.id} showNotification={showNotification} canEdit={canEditAccountingSection} />
+            </div>
+          )}
+          {isSuperAdmin && (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--crm-border)', borderRadius: 12, padding: 18 }}>
+              <ClientProfilePermissionManager clientId={lead.id} showNotification={showNotification} />
+            </div>
+          )}
+        </section>
       )}
 
       <div className="crm-profile-grid">
