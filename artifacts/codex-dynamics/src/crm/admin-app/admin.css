@@ -5109,7 +5109,7 @@
 .crm-admin-app .crm-super-admin-content input[type="email"],
 .crm-admin-app .crm-super-admin-content input[type="password"],
 .crm-admin-app .crm-super-admin-content input[type="number"],
-.crm-admin-app .crm-super-admin-content input[type="search"],
+.crm-admin-app .crm-super-admin-content input[type="search"]:not(.aw-search-input),
 .crm-admin-app .crm-super-admin-content input[type="date"],
 .crm-admin-app .crm-super-admin-content select,
 .crm-admin-app .crm-super-admin-content textarea {
@@ -5886,7 +5886,7 @@
   .crm-admin-app.crm-admin-app input[type="email"],
   .crm-admin-app.crm-admin-app input[type="password"],
   .crm-admin-app.crm-admin-app input[type="number"],
-  .crm-admin-app.crm-admin-app input[type="search"],
+  .crm-admin-app.crm-admin-app input[type="search"]:not(.aw-search-input),
   .crm-admin-app.crm-admin-app input[type="tel"],
   .crm-admin-app.crm-admin-app input[type="url"],
   .crm-admin-app.crm-admin-app input[type="date"],

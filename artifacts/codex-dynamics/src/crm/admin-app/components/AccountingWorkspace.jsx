@@ -555,7 +555,7 @@ export default function AccountingWorkspace({ showNotification }) {
         </div>
         {view !== 'clients' && <label className="aw-search">
           <Search size={15} aria-hidden="true" />
-          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search this view" aria-label="Search accounting records" data-testid="input-accounting-search" />
+          <input className="aw-search-input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search this view" aria-label="Search accounting records" data-testid="input-accounting-search" />
           {search && <button type="button" className="aw-search-clear" aria-label="Clear search" onClick={() => setSearch('')} data-testid="button-clear-accounting-search"><X size={14} aria-hidden="true" /></button>}
         </label>}
       </div>
@@ -653,7 +653,7 @@ export default function AccountingWorkspace({ showNotification }) {
         <div className="aw-client-tools">
           <label className="aw-search aw-client-search">
             <Search size={15} aria-hidden="true" />
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, company, email, or phone" aria-label="Search clients by name, company, email, or phone" data-testid="input-client-search" />
+            <input className="aw-search-input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, company, email, or phone" aria-label="Search clients by name, company, email, or phone" data-testid="input-client-search" />
             {search && <button type="button" className="aw-search-clear" aria-label="Clear client search" onClick={() => setSearch('')} data-testid="button-clear-client-search"><X size={14} aria-hidden="true" /></button>}
           </label>
           <label className="aw-client-sort"><span>Sort</span><select value={clientSort} onChange={(event) => setClientSort(event.target.value)} aria-label="Sort client accounts" data-testid="select-client-sort">

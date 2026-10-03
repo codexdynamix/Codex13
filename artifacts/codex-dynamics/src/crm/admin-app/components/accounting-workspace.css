@@ -76,26 +76,7 @@
 .crm-admin-app .aw-tabs button span { min-width: 18px; padding: 1px 5px; border: 1px solid var(--aw-border); border-radius: 10px; color: var(--aw-muted); font-size: 9px; line-height: 1.4; text-align: center; }
 .crm-admin-app .aw-search { width: min(250px, 34vw); height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--aw-border); border-radius: 5px; background: var(--aw-base); color: var(--aw-muted); }
 .crm-admin-app .aw-search:focus-within { border-color: color-mix(in srgb, var(--aw-accent) 70%, var(--aw-border)); }
-.crm-admin-app .accounting-workspace .aw-search input[type="search"] {
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  flex: 1 1 auto;
-  margin: 0;
-  padding: 0;
-  display: block;
-  border: 0;
-  border-radius: 0;
-  outline: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--aw-text);
-  font-size: 11px;
-  line-height: normal;
-  appearance: none;
-  -webkit-appearance: none;
-}
+.crm-admin-app .aw-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--aw-text); font-size: 11px; }
 .crm-admin-app .aw-search input::placeholder { color: var(--aw-muted); }
 .crm-admin-app .aw-search input[type="search"]::-webkit-search-cancel-button { display: none; }
 .crm-admin-app .aw-search-clear { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--aw-muted); cursor: pointer; }
