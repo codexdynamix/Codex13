@@ -4,8 +4,10 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 
 ## Run & Operate
 
+- On a fresh workspace, install the locked dependencies with `npm ci` from the repository root.
 - The `artifacts/codex-dynamics: web` workflow starts the React/Vite frontend.
 - The `artifacts/api-server: API Server` workflow runs the PHP API router.
+- Start both workflows for a complete preview; the API is served under `/api`.
 - The local API uses SQLite at `artifacts/codex-dynamics/data/codex.sqlite` (outside the public API directory).
 - A separate populated SQLite copy exists under `artifacts/codex-dynamics/artifacts/codex-dynamics/data/`; it is intentionally inactive and must remain untouched unless the user explicitly requests a data import or switch.
 - PHP can use MySQL when configured with `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASS`, or a PHP `config.php`; without those settings it uses the bundled SQLite database.
