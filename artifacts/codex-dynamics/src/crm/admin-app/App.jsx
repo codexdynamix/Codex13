@@ -499,7 +499,7 @@ function App() {
 
   const loadBackendAdminData = useCallback(async () => {
     try {
-      const [offices, teams, liveResult, deletedResult, staffRows, deletedOffices, deletedTeams] = await Promise.all([
+      const [offices, teams, liveResult, deletedResult, staffRows, deletedOffices, deletedTeams, deletedStaff] = await Promise.all([
         listOffices(),
         listTeams(),
         fetchAllLeads(),
@@ -507,6 +507,7 @@ function App() {
         listStaff(),
         listOffices({ includeDeleted: 'only' }).catch(() => []),
         listTeams({ includeDeleted: 'only' }).catch(() => []),
+        listStaff({ includeDeleted: 'only' }).catch(() => []),
       ]);
 
       const recycleBin = [
@@ -521,6 +522,12 @@ function App() {
           type: 'team',
           item: t,
           deletedAt: t.deletedAt || new Date().toISOString(),
+        })),
+        ...(deletedStaff || []).map((s) => ({
+          id: s.id,
+          type: 'user',
+          item: s,
+          deletedAt: s.deletedAt || new Date().toISOString(),
         })),
       ];
 

@@ -290,9 +290,41 @@ function initSchema(PDO $pdo): void {
             status TEXT DEFAULT 'Active',
             capabilities TEXT,
             last_login_at TEXT,
-            created_at TEXT
+            created_at TEXT,
+            deleted_at TEXT,
+            deleted_scope_type TEXT,
+            deleted_scope_id TEXT
         );
     ");
+    ensureDatabaseColumn($pdo, 'staff_users', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'staff_users', 'deleted_scope_type', 'VARCHAR(16) NULL');
+    ensureDatabaseColumn($pdo, 'staff_users', 'deleted_scope_id', 'VARCHAR(128) NULL');
+
+    // Migrate legacy staff passwords once. New writes are hashed at the API
+    // boundary; this preserves existing passwords while removing plaintext
+    // values from the database.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            id VARCHAR(100) PRIMARY KEY,
+            applied_at VARCHAR(40) NOT NULL
+        )
+    ");
+    $passwordMigration = 'hash_legacy_staff_passwords_v1';
+    $migrationCheck = $pdo->prepare('SELECT id FROM schema_migrations WHERE id = ?');
+    $migrationCheck->execute([$passwordMigration]);
+    if (!$migrationCheck->fetchColumn()) {
+        $legacyPasswords = $pdo->query('SELECT id, password FROM staff_users')->fetchAll(PDO::FETCH_ASSOC);
+        $savePassword = $pdo->prepare('UPDATE staff_users SET password = ? WHERE id = ?');
+        foreach ($legacyPasswords as $legacyPassword) {
+            $passwordInfo = password_get_info((string)$legacyPassword['password']);
+            if (($passwordInfo['algo'] ?? null) !== null) continue;
+            $hash = password_hash((string)$legacyPassword['password'], PASSWORD_DEFAULT);
+            if ($hash === false) throw new RuntimeException('Could not securely migrate a staff password.');
+            $savePassword->execute([$hash, $legacyPassword['id']]);
+        }
+        $pdo->prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)')
+            ->execute([$passwordMigration, date('c')]);
+    }
 
     // 11. Client Websites Table
     $pdo->exec("
@@ -540,9 +572,15 @@ function initSchema(PDO $pdo): void {
             manager_id TEXT,
             manager_name TEXT,
             manager_email TEXT,
-            created_at TEXT
+            created_at TEXT,
+            deleted_at TEXT,
+            deleted_scope_type TEXT,
+            deleted_scope_id TEXT
         );
     ");
+    ensureDatabaseColumn($pdo, 'offices', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'offices', 'deleted_scope_type', 'VARCHAR(16) NULL');
+    ensureDatabaseColumn($pdo, 'offices', 'deleted_scope_id', 'VARCHAR(128) NULL');
 
     // 20. Teams Table
     $pdo->exec("
@@ -553,8 +591,36 @@ function initSchema(PDO $pdo): void {
             leader_id TEXT,
             leader_name TEXT,
             max_size INTEGER DEFAULT 10,
-            created_at TEXT
+            created_at TEXT,
+            deleted_at TEXT,
+            deleted_scope_type TEXT,
+            deleted_scope_id TEXT
         );
+    ");
+    ensureDatabaseColumn($pdo, 'teams', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'teams', 'deleted_scope_type', 'VARCHAR(16) NULL');
+    ensureDatabaseColumn($pdo, 'teams', 'deleted_scope_id', 'VARCHAR(128) NULL');
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS crm_assignment_restore (
+            id VARCHAR(128) PRIMARY KEY,
+            entity_type VARCHAR(16) NOT NULL,
+            entity_id VARCHAR(128) NOT NULL,
+            lead_id VARCHAR(128) NOT NULL,
+            assigned_office_id VARCHAR(128),
+            assigned_team_id VARCHAR(128),
+            assigned_team_leader_id VARCHAR(128),
+            assigned_agent_id VARCHAR(128),
+            assigned_by VARCHAR(128)
+        );
+        CREATE TABLE IF NOT EXISTS lead_assignment_history (
+            id VARCHAR(128) PRIMARY KEY,
+            lead_id VARCHAR(128) NOT NULL,
+            actor_id VARCHAR(128) NOT NULL,
+            previous_assignment TEXT NOT NULL,
+            new_assignment TEXT NOT NULL,
+            created_at VARCHAR(40) NOT NULL
+        )
     ");
 
     // Business data is created through the API. Do not repopulate deleted records

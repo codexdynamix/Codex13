@@ -66,16 +66,303 @@ function decryptClientSecret(?string $encoded): string {
 
 function requireActiveAdminStaff(PDO $pdo, ?array $session): array {
     if (!$session) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
-    $stmt = $pdo->prepare("SELECT id, role, status FROM staff_users WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT id, role, status, office_id, team_id, capabilities FROM staff_users WHERE id = ? AND deleted_at IS NULL");
     $stmt->execute([$session['id']]);
     $staff = $stmt->fetch();
     if (!$staff || $staff['status'] !== 'Active') jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
+    $staff['capabilities'] = json_decode((string)($staff['capabilities'] ?? '{}'), true) ?: [];
     return $staff;
 }
 
 function requireSuperAdmin(PDO $pdo, ?array $session): void {
     $staff = requireActiveAdminStaff($pdo, $session);
-    if ($staff['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage client access and accounting.'], 403);
+    if ($staff['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can perform this action.'], 403);
+}
+
+function optionalId(mixed $value): ?string {
+    $value = trim((string)($value ?? ''));
+    return $value === '' ? null : $value;
+}
+
+function activeOffice(PDO $pdo, ?string $id): ?array {
+    if ($id === null) return null;
+    $stmt = $pdo->prepare('SELECT * FROM offices WHERE id = ? AND deleted_at IS NULL');
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+function activeTeam(PDO $pdo, ?string $id): ?array {
+    if ($id === null) return null;
+    $stmt = $pdo->prepare('SELECT * FROM teams WHERE id = ? AND deleted_at IS NULL');
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+function activeStaffRecord(PDO $pdo, ?string $id): ?array {
+    if ($id === null) return null;
+    $stmt = $pdo->prepare("SELECT id, name, email, role, office_id, team_id, status, capabilities FROM staff_users WHERE id = ? AND deleted_at IS NULL");
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+function publicStaffRecord(PDO $pdo, string $id): ?array {
+    $stmt = $pdo->prepare("
+        SELECT s.id, s.email, s.name, s.role, s.office_id, s.team_id, s.status,
+               s.capabilities, s.last_login_at, s.created_at, s.deleted_at,
+               s.deleted_scope_type, s.deleted_scope_id,
+               o.name AS office_name, t.name AS team_name,
+               (SELECT COUNT(*) FROM leads l WHERE l.deleted_at IS NULL AND (l.assigned_agent_id = s.id OR l.assigned_team_leader_id = s.id)) AS lead_count
+        FROM staff_users s
+        LEFT JOIN offices o ON o.id = s.office_id
+        LEFT JOIN teams t ON t.id = s.team_id
+        WHERE s.id = ?
+    ");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+    $row['capabilities'] = json_decode((string)($row['capabilities'] ?? '{}'), true) ?: [];
+    return $row;
+}
+
+function leadAssignmentFromRow(array $row): array {
+    return [
+        'office_id' => $row['assigned_office_id'] ?? null,
+        'team_id' => $row['assigned_team_id'] ?? null,
+        'team_leader_id' => $row['assigned_team_leader_id'] ?? null,
+        'agent_id' => $row['assigned_agent_id'] ?? null,
+    ];
+}
+
+function validateLeadAssignment(PDO $pdo, array $input): array {
+    $officeId = optionalId($input['office_id'] ?? null);
+    $teamId = optionalId($input['team_id'] ?? null);
+    $teamLeaderId = optionalId($input['team_leader_id'] ?? null);
+    $agentId = optionalId($input['agent_id'] ?? null);
+
+    if ($officeId !== null && !activeOffice($pdo, $officeId)) {
+        jsonResponse(['ok' => false, 'error' => 'The selected office is unavailable.'], 422);
+    }
+
+    if ($teamId !== null) {
+        $team = activeTeam($pdo, $teamId);
+        if (!$team) jsonResponse(['ok' => false, 'error' => 'The selected team is unavailable.'], 422);
+        if ($officeId !== null && !empty($team['office_id']) && $officeId !== $team['office_id']) {
+            jsonResponse(['ok' => false, 'error' => 'The selected team does not belong to that office.'], 422);
+        }
+        if ($officeId === null && !empty($team['office_id'])) $officeId = (string)$team['office_id'];
+    }
+
+    if ($teamLeaderId !== null) {
+        $leader = activeStaffRecord($pdo, $teamLeaderId);
+        if (!$leader || $leader['role'] !== 'Team Leader') {
+            jsonResponse(['ok' => false, 'error' => 'The selected team leader is unavailable.'], 422);
+        }
+        if ($teamId !== null && $leader['team_id'] !== $teamId) {
+            jsonResponse(['ok' => false, 'error' => 'The selected team leader does not belong to that team.'], 422);
+        }
+        if ($officeId !== null && !empty($leader['office_id']) && $leader['office_id'] !== $officeId) {
+            jsonResponse(['ok' => false, 'error' => 'The selected team leader does not belong to that office.'], 422);
+        }
+    }
+
+    if ($agentId !== null) {
+        $agent = activeStaffRecord($pdo, $agentId);
+        if (!$agent || $agent['role'] !== 'Agent') {
+            jsonResponse(['ok' => false, 'error' => 'The selected agent is unavailable.'], 422);
+        }
+        if ($teamId !== null && $agent['team_id'] !== $teamId) {
+            jsonResponse(['ok' => false, 'error' => 'The selected agent does not belong to that team.'], 422);
+        }
+        if ($officeId !== null && !empty($agent['office_id']) && $agent['office_id'] !== $officeId) {
+            jsonResponse(['ok' => false, 'error' => 'The selected agent does not belong to that office.'], 422);
+        }
+        $teamId = optionalId($agent['team_id'] ?? null);
+        $officeId = optionalId($agent['office_id'] ?? null);
+        $teamLeaderId = null;
+    }
+
+    return [
+        'office_id' => $officeId,
+        'team_id' => $teamId,
+        'team_leader_id' => $teamLeaderId,
+        'agent_id' => $agentId,
+    ];
+}
+
+function assertCanAssignLead(array $actor, array $assignment, PDO $pdo): void {
+    if ($actor['role'] === 'Super Admin') return;
+
+    if ($actor['role'] === 'Office Manager') {
+        $officeId = optionalId($actor['office_id'] ?? null);
+        if ($officeId === null) jsonResponse(['ok' => false, 'error' => 'Your account is not assigned to an office.'], 403);
+        if ($assignment['office_id'] !== null && $assignment['office_id'] !== $officeId) {
+            jsonResponse(['ok' => false, 'error' => 'You can only assign leads within your office.'], 403);
+        }
+        foreach ([
+            ['teams', 'team_id'],
+            ['staff_users', 'agent_id'],
+            ['staff_users', 'team_leader_id'],
+        ] as [$table, $key]) {
+            if ($assignment[$key] === null) continue;
+            $stmt = $pdo->prepare("SELECT office_id FROM {$table} WHERE id = ? AND deleted_at IS NULL");
+            $stmt->execute([$assignment[$key]]);
+            if ($stmt->fetchColumn() !== $officeId) {
+                jsonResponse(['ok' => false, 'error' => 'You can only assign leads to staff and teams in your office.'], 403);
+            }
+        }
+        return;
+    }
+
+    if ($actor['role'] === 'Team Leader') {
+        $teamId = optionalId($actor['team_id'] ?? null);
+        if ($assignment['team_id'] !== null && $assignment['team_id'] !== $teamId) {
+            jsonResponse(['ok' => false, 'error' => 'You can only assign leads within your team.'], 403);
+        }
+        if ($assignment['agent_id'] !== null) {
+            $agent = activeStaffRecord($pdo, $assignment['agent_id']);
+            if (!$teamId || !$agent || $agent['team_id'] !== $teamId) {
+                jsonResponse(['ok' => false, 'error' => 'You can only assign leads to agents in your team.'], 403);
+            }
+        }
+        if ($assignment['team_leader_id'] !== null && $assignment['team_leader_id'] !== $actor['id']) {
+            jsonResponse(['ok' => false, 'error' => 'You can only assign leads directly to yourself.'], 403);
+        }
+        $officeId = optionalId($actor['office_id'] ?? null);
+        if ($assignment['office_id'] !== null && $assignment['office_id'] !== $officeId) {
+            jsonResponse(['ok' => false, 'error' => 'You can only assign leads within your office.'], 403);
+        }
+        return;
+    }
+
+    if ($actor['role'] === 'Agent') {
+        if ($assignment['agent_id'] === $actor['id']
+            && $assignment['team_id'] === optionalId($actor['team_id'] ?? null)
+            && $assignment['office_id'] === optionalId($actor['office_id'] ?? null)) {
+            return;
+        }
+        jsonResponse(['ok' => false, 'error' => 'You can only assign a new lead to yourself.'], 403);
+    }
+
+    jsonResponse(['ok' => false, 'error' => 'Your role cannot reassign leads.'], 403);
+}
+
+function actorCanViewLead(array $actor, array $lead): bool {
+    if ($actor['role'] === 'Super Admin') return true;
+    if ($actor['role'] === 'Office Manager') return (string)($lead['assigned_office_id'] ?? '') !== '' && $lead['assigned_office_id'] === $actor['office_id'];
+    if ($actor['role'] === 'Team Leader') {
+        return (!empty($actor['team_id']) && $lead['assigned_team_id'] === $actor['team_id'])
+            || $lead['assigned_team_leader_id'] === $actor['id'];
+    }
+    if ($actor['role'] === 'Agent') return $lead['assigned_agent_id'] === $actor['id'];
+    return false;
+}
+
+function saveLeadAssignment(PDO $pdo, string $leadId, array $assignment, array $actor): array {
+    $stmt = $pdo->prepare('SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL');
+    $stmt->execute([$leadId]);
+    $lead = $stmt->fetch();
+    if (!$lead) jsonResponse(['ok' => false, 'error' => 'Lead not found.'], 404);
+
+    $previous = leadAssignmentFromRow($lead);
+    $now = date('c');
+    $pdo->prepare('UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_team_leader_id = ?, assigned_agent_id = ?, assigned_by = ?, updated_at = ? WHERE id = ?')
+        ->execute([$assignment['office_id'], $assignment['team_id'], $assignment['team_leader_id'], $assignment['agent_id'], $actor['id'], $now, $leadId]);
+    $historyId = 'lah_' . bin2hex(random_bytes(10));
+    $pdo->prepare('INSERT INTO lead_assignment_history (id, lead_id, actor_id, previous_assignment, new_assignment, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        ->execute([$historyId, $leadId, $actor['id'], json_encode($previous), json_encode($assignment), $now]);
+
+    $stmt = $pdo->prepare('SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id WHERE l.id = ?');
+    $stmt->execute([$leadId]);
+    return $stmt->fetch() ?: [];
+}
+
+function canManageStaffRecord(array $actor, array $target): bool {
+    if ($actor['role'] === 'Super Admin') return true;
+    if ($actor['id'] === $target['id']) return true;
+    if ($actor['role'] === 'Office Manager') {
+        return $target['office_id'] === $actor['office_id']
+            && in_array($target['role'], ['Team Leader', 'Agent'], true);
+    }
+    if ($actor['role'] === 'Team Leader') {
+        return $target['role'] === 'Agent'
+            && !empty($actor['team_id'])
+            && $target['team_id'] === $actor['team_id'];
+    }
+    return false;
+}
+
+function canManageStaffStatus(array $actor, array $target): bool {
+    if ($actor['role'] === 'Super Admin') return true;
+    if ($actor['role'] === 'Office Manager') {
+        return $target['office_id'] === $actor['office_id']
+            && in_array($target['role'], ['Team Leader', 'Agent'], true);
+    }
+    if ($actor['role'] === 'Team Leader') {
+        return $target['role'] === 'Agent'
+            && !empty($actor['team_id'])
+            && $target['team_id'] === $actor['team_id'];
+    }
+    return false;
+}
+
+function snapshotAndClearLeadAssignments(PDO $pdo, string $entityType, string $entityId, string $whereSql, array $whereParams, string $actorId): array {
+    $stmt = $pdo->prepare("SELECT id, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, assigned_by FROM leads WHERE deleted_at IS NULL AND ({$whereSql})");
+    $stmt->execute($whereParams);
+    $rows = $stmt->fetchAll();
+    $insert = $pdo->prepare('INSERT INTO crm_assignment_restore (id, entity_type, entity_id, lead_id, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, assigned_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $clear = $pdo->prepare('UPDATE leads SET assigned_office_id = NULL, assigned_team_id = NULL, assigned_team_leader_id = NULL, assigned_agent_id = NULL, assigned_by = ?, updated_at = ? WHERE id = ?');
+    $now = date('c');
+    foreach ($rows as $row) {
+        $pdo->prepare('DELETE FROM crm_assignment_restore WHERE entity_type = ? AND entity_id = ? AND lead_id = ?')
+            ->execute([$entityType, $entityId, $row['id']]);
+        $insert->execute([
+            'crar_' . bin2hex(random_bytes(10)),
+            $entityType,
+            $entityId,
+            $row['id'],
+            $row['assigned_office_id'],
+            $row['assigned_team_id'],
+            $row['assigned_team_leader_id'],
+            $row['assigned_agent_id'],
+            $row['assigned_by'],
+        ]);
+        $clear->execute([$actorId, $now, $row['id']]);
+    }
+    return array_column($rows, 'id');
+}
+
+function restoreLeadAssignmentSnapshots(PDO $pdo, string $entityType, string $entityId): array {
+    $stmt = $pdo->prepare('SELECT * FROM crm_assignment_restore WHERE entity_type = ? AND entity_id = ? ORDER BY lead_id');
+    $stmt->execute([$entityType, $entityId]);
+    $snapshots = $stmt->fetchAll();
+    $update = $pdo->prepare('UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_team_leader_id = ?, assigned_agent_id = ?, assigned_by = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL');
+    $now = date('c');
+    foreach ($snapshots as $snapshot) {
+        $update->execute([
+            $snapshot['assigned_office_id'],
+            $snapshot['assigned_team_id'],
+            $snapshot['assigned_team_leader_id'],
+            $snapshot['assigned_agent_id'],
+            $snapshot['assigned_by'],
+            $now,
+            $snapshot['lead_id'],
+        ]);
+    }
+    $pdo->prepare('DELETE FROM crm_assignment_restore WHERE entity_type = ? AND entity_id = ?')
+        ->execute([$entityType, $entityId]);
+    $ids = array_column($snapshots, 'lead_id');
+    if (!$ids) return [];
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $restored = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id WHERE l.deleted_at IS NULL AND l.id IN ({$placeholders})");
+    $restored->execute($ids);
+    return array_map('normalizeLeadRow', $restored->fetchAll());
+}
+
+function activeStaffWithinOffice(PDO $pdo, array $actor, array $target): bool {
+    return $actor['role'] === 'Super Admin'
+        || ($actor['role'] === 'Office Manager'
+            && !empty($actor['office_id'])
+            && $target['office_id'] === $actor['office_id']);
 }
 
 function emptyClientProfilePermissions(): array {
@@ -619,6 +906,12 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 ], 409);
             }
             if ($normalizedPhone !== '') $seenPhones[$normalizedPhone] = $index + 1;
+            $assignment = validateLeadAssignment($pdo, [
+                'office_id' => $row['assigned_office_id'] ?? null,
+                'team_id' => $row['assigned_team_id'] ?? null,
+                'team_leader_id' => $row['assigned_team_leader_id'] ?? null,
+                'agent_id' => $row['assigned_agent_id'] ?? null,
+            ]);
             $preparedRows[] = [
                 'id' => 'ld_' . bin2hex(random_bytes(8)),
                 'first_name' => $firstName,
@@ -637,10 +930,10 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 'message' => trim((string)($row['message'] ?? '')),
                 'notes' => trim((string)($row['notes'] ?? '')),
                 'client_password' => trim((string)($row['client_password'] ?? $row['password'] ?? '')),
-                'assigned_office_id' => $row['assigned_office_id'] ?? null,
-                'assigned_team_id' => $row['assigned_team_id'] ?? null,
-                'assigned_team_leader_id' => $row['assigned_team_leader_id'] ?? null,
-                'assigned_agent_id' => $row['assigned_agent_id'] ?? null,
+                'assigned_office_id' => $assignment['office_id'],
+                'assigned_team_id' => $assignment['team_id'],
+                'assigned_team_leader_id' => $assignment['team_leader_id'],
+                'assigned_agent_id' => $assignment['agent_id'],
             ];
         }
 
@@ -696,6 +989,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
     }
 
     if ($isAdminLeadCollection && $method === 'POST') {
+        $actor = requireActiveAdminStaff($pdo, $adminSession);
         $firstName = trim((string)($input['first_name'] ?? ''));
         $lastName = trim((string)($input['last_name'] ?? ''));
         $name = trim((string)($input['name'] ?? trim($firstName . ' ' . $lastName)));
@@ -714,6 +1008,22 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         $now = date('c');
         $stage = trim((string)($input['stage'] ?? $input['status'] ?? 'New')) ?: 'New';
         $source = trim((string)($input['source'] ?? 'manual_crm_entry'));
+        $assignmentInput = [
+            'office_id' => $input['assigned_office_id'] ?? null,
+            'team_id' => $input['assigned_team_id'] ?? null,
+            'team_leader_id' => $input['assigned_team_leader_id'] ?? null,
+            'agent_id' => $input['assigned_agent_id'] ?? null,
+        ];
+        if ($actor['role'] === 'Office Manager' && !array_filter($assignmentInput)) {
+            $assignmentInput['office_id'] = $actor['office_id'];
+        } elseif ($actor['role'] === 'Team Leader' && !array_filter($assignmentInput)) {
+            $assignmentInput['office_id'] = $actor['office_id'];
+            $assignmentInput['team_leader_id'] = $actor['id'];
+        } elseif ($actor['role'] === 'Agent' && !array_filter($assignmentInput)) {
+            $assignmentInput['agent_id'] = $actor['id'];
+        }
+        $assignment = validateLeadAssignment($pdo, $assignmentInput);
+        assertCanAssignLead($actor, $assignment, $pdo);
         $stmt = $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $pdo->beginTransaction();
         try {
@@ -741,12 +1051,13 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 trim((string)($input['message'] ?? '')),
                 $source,
                 trim((string)($input['notes'] ?? '')),
-                $input['assigned_office_id'] ?? null,
-                $input['assigned_team_id'] ?? null,
-                $input['assigned_team_leader_id'] ?? null,
-                $input['assigned_agent_id'] ?? null,
+                $assignment['office_id'],
+                $assignment['team_id'],
+                $assignment['team_leader_id'],
+                $assignment['agent_id'],
                 $now, $now,
             ]);
+            if (array_filter($assignment)) saveLeadAssignment($pdo, $id, $assignment, $actor);
             $pdo->commit();
         } catch (Throwable $error) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -784,6 +1095,32 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
             $updates = [];
             foreach ($allowed as $field) {
                 if (array_key_exists($field, $input)) $updates[$field] = $input[$field];
+            }
+            $assignmentKeys = ['assigned_office_id', 'assigned_team_id', 'assigned_team_leader_id', 'assigned_agent_id'];
+            $assignmentChanged = false;
+            $previousAssignment = leadAssignmentFromRow($existingLead);
+            $nextAssignment = $previousAssignment;
+            foreach ($assignmentKeys as $field) {
+                if (!array_key_exists($field, $updates)) continue;
+                $assignmentChanged = true;
+                $key = match ($field) {
+                    'assigned_office_id' => 'office_id',
+                    'assigned_team_id' => 'team_id',
+                    'assigned_team_leader_id' => 'team_leader_id',
+                    default => 'agent_id',
+                };
+                $nextAssignment[$key] = $updates[$field];
+                unset($updates[$field]);
+            }
+            if ($assignmentChanged) {
+                $assignmentActor = requireActiveAdminStaff($pdo, $adminSession);
+                $nextAssignment = validateLeadAssignment($pdo, $nextAssignment);
+                assertCanAssignLead($assignmentActor, $nextAssignment, $pdo);
+                $updates['assigned_office_id'] = $nextAssignment['office_id'];
+                $updates['assigned_team_id'] = $nextAssignment['team_id'];
+                $updates['assigned_team_leader_id'] = $nextAssignment['team_leader_id'];
+                $updates['assigned_agent_id'] = $nextAssignment['agent_id'];
+                $updates['assigned_by'] = $assignmentActor['id'];
             }
             if (isset($updates['stage']) && !isset($updates['status'])) $updates['status'] = $updates['stage'];
             if (isset($updates['status']) && !isset($updates['stage'])) $updates['stage'] = $updates['status'];
@@ -851,9 +1188,21 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 $updateFilters[] = str_replace('l.', '', $scopeSql);
                 array_push($updateParams, ...$scopeParams);
             }
-            $pdo->prepare("UPDATE leads SET {$setSql} WHERE " . implode(' AND ', $updateFilters))->execute($updateParams);
-            $updatedStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id{$leadWhere}");
-            $updatedStmt->execute($leadParams);
+            $pdo->beginTransaction();
+            try {
+                $pdo->prepare("UPDATE leads SET {$setSql} WHERE " . implode(' AND ', $updateFilters))->execute($updateParams);
+                if ($assignmentChanged) {
+                    $historyId = 'lah_' . bin2hex(random_bytes(10));
+                    $pdo->prepare('INSERT INTO lead_assignment_history (id, lead_id, actor_id, previous_assignment, new_assignment, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+                        ->execute([$historyId, $leadId, $assignmentActor['id'], json_encode($previousAssignment), json_encode($nextAssignment), date('c')]);
+                }
+                $pdo->commit();
+            } catch (Throwable $error) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $error;
+            }
+            $updatedStmt = $pdo->prepare("SELECT l.*, staff.name AS assigned_agent_name FROM leads l LEFT JOIN staff_users staff ON staff.id = l.assigned_agent_id WHERE l.id = ? AND l.deleted_at IS NULL");
+            $updatedStmt->execute([$leadId]);
             jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($updatedStmt->fetch())]);
         }
         if ($method === 'DELETE') {
@@ -1310,6 +1659,217 @@ if ($apiPath === '/admin/audit' || preg_match('#^/admin/users/([^/]+)/profile-hi
 // 9. ADMIN: OFFICES MANAGEMENT
 // -----------------------------------------------------------------------------
 if ($apiPath === '/admin/offices') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $includeDeleted = (string)($_GET['include_deleted'] ?? '');
+    if ($includeDeleted !== '' && $actor['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can view deleted offices.'], 403);
+    }
+    if ($method === 'POST') {
+        requireSuperAdmin($pdo, $adminSession);
+        $name = trim((string)($input['name'] ?? ''));
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'Office name is required.'], 400);
+        $id = 'of_' . bin2hex(random_bytes(8));
+        $now = date('c');
+        $managerId = null;
+        $manager = null;
+        $managerName = trim((string)($input['manager_name'] ?? 'Unassigned')) ?: 'Unassigned';
+        $managerEmail = strtolower(trim((string)($input['manager_email'] ?? '')));
+        $password = (string)($input['manager_password'] ?? '');
+        if ($password !== '' && strlen($password) < 8) jsonResponse(['ok' => false, 'error' => 'Staff passwords must be at least 8 characters.'], 422);
+        if ($password !== '') {
+            $managerId = 'adm_' . bin2hex(random_bytes(8));
+            $managerEmail = $managerEmail ?: 'manager_' . substr($managerId, 4) . '@codexdynamics.com';
+            if (!filter_var($managerEmail, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid manager email address.'], 422);
+            $check = $pdo->prepare('SELECT id FROM staff_users WHERE LOWER(email) = ?');
+            $check->execute([$managerEmail]);
+            if ($check->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'That email address is already in use.'], 409);
+            $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, 'Office Manager', ?, 'Active', ?, ?)")
+                ->execute([$managerId, $managerEmail, $hash, $managerName, $id, $caps, $now]);
+            $manager = ['id' => $managerId, 'name' => $managerName, 'email' => $managerEmail, 'role' => 'Office Manager', 'office_id' => $id, 'team_id' => null, 'status' => 'Active', 'capabilities' => json_decode($caps, true), 'created_at' => $now];
+        }
+        $pdo->prepare('INSERT INTO offices (id, name, manager_id, manager_name, manager_email, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([$id, $name, $managerId, $managerName, $managerEmail, $now]);
+        jsonResponse(['ok' => true, 'office' => ['id' => $id, 'name' => $name, 'manager_id' => $managerId, 'manager_name' => $managerName, 'manager_email' => $managerEmail, 'team_count' => 0, 'agent_count' => 0, 'lead_count' => 0, 'created_at' => $now], 'manager' => $manager], 201);
+    }
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $deletedFilter = $includeDeleted === 'only' ? 'deleted_at IS NOT NULL' : ($includeDeleted === '1' ? '1=1' : 'deleted_at IS NULL');
+    $params = [];
+    if ($actor['role'] !== 'Super Admin') {
+        $officeId = optionalId($actor['office_id'] ?? null);
+        if ($officeId === null) jsonResponse(['ok' => true, 'offices' => []]);
+        $deletedFilter .= ' AND id = ?';
+        $params[] = $officeId;
+    }
+    $stmt = $pdo->prepare("SELECT * FROM offices WHERE {$deletedFilter} ORDER BY created_at DESC");
+    $stmt->execute($params);
+    $offices = $stmt->fetchAll();
+    foreach ($offices as &$office) {
+        $count = $pdo->prepare('SELECT COUNT(*) FROM teams WHERE office_id = ? AND deleted_at IS NULL');
+        $count->execute([$office['id']]);
+        $office['team_count'] = (int)$count->fetchColumn();
+        $count = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE office_id = ? AND role = 'Agent' AND deleted_at IS NULL");
+        $count->execute([$office['id']]);
+        $office['agent_count'] = (int)$count->fetchColumn();
+        $count = $pdo->prepare('SELECT COUNT(*) FROM leads WHERE assigned_office_id = ? AND deleted_at IS NULL');
+        $count->execute([$office['id']]);
+        $office['lead_count'] = (int)$count->fetchColumn();
+    }
+    unset($office);
+    jsonResponse(['ok' => true, 'offices' => $offices]);
+}
+
+if (preg_match('#^/admin/offices/([^/]+)/restore$#', $apiPath, $m) && $method === 'POST') {
+    requireSuperAdmin($pdo, $adminSession);
+    $officeId = rawurldecode($m[1]);
+    $stmt = $pdo->prepare('SELECT * FROM offices WHERE id = ? AND deleted_at IS NOT NULL');
+    $stmt->execute([$officeId]);
+    $office = $stmt->fetch();
+    if (!$office) jsonResponse(['ok' => false, 'error' => 'Deleted office not found.'], 404);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE offices SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE id = ?')->execute([$officeId]);
+        $pdo->prepare("UPDATE teams SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE deleted_scope_type = 'office' AND deleted_scope_id = ?")->execute([$officeId]);
+        $pdo->prepare("UPDATE staff_users SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE deleted_scope_type = 'office' AND deleted_scope_id = ?")->execute([$officeId]);
+        $leads = restoreLeadAssignmentSnapshots($pdo, 'office', $officeId);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    $q = $pdo->prepare('SELECT * FROM teams WHERE office_id = ? AND deleted_at IS NULL');
+    $q->execute([$officeId]);
+    $teams = $q->fetchAll();
+    $q = $pdo->prepare('SELECT * FROM offices WHERE id = ? AND deleted_at IS NULL');
+    $q->execute([$officeId]);
+    $office = $q->fetch();
+    $q = $pdo->prepare("SELECT id, name, email, role, office_id, team_id, status, capabilities, last_login_at, created_at, deleted_at FROM staff_users WHERE office_id = ? AND deleted_at IS NULL");
+    $q->execute([$officeId]);
+    jsonResponse(['ok' => true, 'office' => $office, 'teams' => $teams, 'staff' => $q->fetchAll(), 'leads' => $leads]);
+}
+
+if (preg_match('#^/admin/offices/([^/]+)(?:/(manager))?$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $officeId = rawurldecode($m[1]);
+    $isPermanentDelete = $method === 'DELETE' && (string)($_GET['permanent'] ?? '') === '1';
+    if ($isPermanentDelete) {
+        $q = $pdo->prepare('SELECT * FROM offices WHERE id = ? AND deleted_at IS NOT NULL');
+        $q->execute([$officeId]);
+        $office = $q->fetch() ?: null;
+    } else {
+        $office = activeOffice($pdo, $officeId);
+    }
+    if (!$office) jsonResponse(['ok' => false, 'error' => 'Office not found.'], 404);
+    $sub = $m[2] ?? '';
+    if ($sub === 'manager' && $method === 'POST') {
+        requireSuperAdmin($pdo, $adminSession);
+        $managerId = optionalId($input['manager_id'] ?? null);
+        $manager = $managerId ? activeStaffRecord($pdo, $managerId) : null;
+        if ($managerId && (!$manager || $manager['role'] !== 'Office Manager')) jsonResponse(['ok' => false, 'error' => 'Select an active Office Manager.'], 422);
+        $pdo->beginTransaction();
+        try {
+            if (!empty($office['manager_id']) && $office['manager_id'] !== $managerId) {
+                $pdo->prepare("UPDATE staff_users SET office_id = NULL WHERE id = ? AND role = 'Office Manager'")->execute([$office['manager_id']]);
+            }
+            if ($manager) {
+                $pdo->prepare('UPDATE offices SET manager_id = NULL WHERE manager_id = ?')->execute([$managerId]);
+                $pdo->prepare('UPDATE staff_users SET office_id = ? WHERE id = ?')->execute([$officeId, $managerId]);
+            }
+            $pdo->prepare('UPDATE offices SET manager_id = ?, manager_name = ?, manager_email = ? WHERE id = ?')
+                ->execute([$managerId, $manager['name'] ?? 'Unassigned', $manager['email'] ?? '', $officeId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        $q = $pdo->prepare('SELECT * FROM offices WHERE id = ?');
+        $q->execute([$officeId]);
+        jsonResponse(['ok' => true, 'office' => $q->fetch(), 'manager' => $manager]);
+    }
+    if ($method === 'PATCH') {
+        requireSuperAdmin($pdo, $adminSession);
+        $name = trim((string)($input['name'] ?? ''));
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'Office name is required.'], 422);
+        $pdo->prepare('UPDATE offices SET name = ? WHERE id = ? AND deleted_at IS NULL')->execute([$name, $officeId]);
+        $q = $pdo->prepare('SELECT * FROM offices WHERE id = ?');
+        $q->execute([$officeId]);
+        jsonResponse(['ok' => true, 'office' => $q->fetch()]);
+    }
+    if ($method === 'DELETE') {
+        requireSuperAdmin($pdo, $adminSession);
+        if ($isPermanentDelete) {
+            $q = $pdo->prepare('SELECT id FROM teams WHERE office_id = ?');
+            $q->execute([$officeId]);
+            $teamIds = $q->fetchAll(PDO::FETCH_COLUMN);
+            $sql = 'SELECT id FROM staff_users WHERE office_id = ?' . ($teamIds ? ' OR team_id IN (' . implode(',', array_fill(0, count($teamIds), '?')) . ')' : '');
+            $q = $pdo->prepare($sql);
+            $q->execute(array_merge([$officeId], $teamIds));
+            $staffIds = $q->fetchAll(PDO::FETCH_COLUMN);
+            $pdo->beginTransaction();
+            try {
+                $conditions = ['assigned_office_id = ?'];
+                $params = [$officeId];
+                if ($teamIds) {
+                    $conditions[] = 'assigned_team_id IN (' . implode(',', array_fill(0, count($teamIds), '?')) . ')';
+                    array_push($params, ...$teamIds);
+                }
+                if ($staffIds) {
+                    $in = implode(',', array_fill(0, count($staffIds), '?'));
+                    $conditions[] = "(assigned_agent_id IN ({$in}) OR assigned_team_leader_id IN ({$in}))";
+                    array_push($params, ...$staffIds, ...$staffIds);
+                }
+                $pdo->prepare('UPDATE leads SET assigned_office_id = NULL, assigned_team_id = NULL, assigned_team_leader_id = NULL, assigned_agent_id = NULL, assigned_by = NULL WHERE ' . implode(' OR ', $conditions))->execute($params);
+                if ($staffIds) {
+                    $in = implode(',', array_fill(0, count($staffIds), '?'));
+                    $pdo->prepare("DELETE FROM admin_sessions WHERE user_id IN ({$in})")->execute($staffIds);
+                    $pdo->prepare("DELETE FROM staff_users WHERE id IN ({$in})")->execute($staffIds);
+                }
+                $pdo->prepare('DELETE FROM teams WHERE office_id = ?')->execute([$officeId]);
+                $pdo->prepare("DELETE FROM crm_assignment_restore WHERE entity_type = 'office' AND entity_id = ?")->execute([$officeId]);
+                $pdo->prepare('DELETE FROM offices WHERE id = ?')->execute([$officeId]);
+                $pdo->commit();
+            } catch (Throwable $error) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $error;
+            }
+            jsonResponse(['ok' => true]);
+        }
+        $q = $pdo->prepare('SELECT id FROM teams WHERE office_id = ? AND deleted_at IS NULL');
+        $q->execute([$officeId]);
+        $teamIds = $q->fetchAll(PDO::FETCH_COLUMN);
+        $q = $pdo->prepare('SELECT id FROM staff_users WHERE office_id = ? AND deleted_at IS NULL');
+        $q->execute([$officeId]);
+        $staffIds = $q->fetchAll(PDO::FETCH_COLUMN);
+        $conditions = ['assigned_office_id = ?'];
+        $params = [$officeId];
+        if ($teamIds) {
+            $conditions[] = 'assigned_team_id IN (' . implode(',', array_fill(0, count($teamIds), '?')) . ')';
+            array_push($params, ...$teamIds);
+        }
+        if ($staffIds) {
+            $in = implode(',', array_fill(0, count($staffIds), '?'));
+            $conditions[] = "(assigned_agent_id IN ({$in}) OR assigned_team_leader_id IN ({$in}))";
+            array_push($params, ...$staffIds, ...$staffIds);
+        }
+        $now = date('c');
+        $pdo->beginTransaction();
+        try {
+            $leadIds = snapshotAndClearLeadAssignments($pdo, 'office', $officeId, implode(' OR ', $conditions), $params, $actor['id']);
+            $pdo->prepare('UPDATE offices SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')->execute([$now, $officeId]);
+            $pdo->prepare("UPDATE teams SET deleted_at = ?, deleted_scope_type = 'office', deleted_scope_id = ? WHERE office_id = ? AND deleted_at IS NULL")->execute([$now, $officeId, $officeId]);
+            $pdo->prepare("UPDATE staff_users SET deleted_at = ?, deleted_scope_type = 'office', deleted_scope_id = ? WHERE office_id = ? AND deleted_at IS NULL")->execute([$now, $officeId, $officeId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'deleted_at' => $now, 'team_ids' => $teamIds, 'staff_ids' => $staffIds, 'lead_ids' => $leadIds]);
+    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+}
+
+if ($apiPath === '/admin/offices') {
     if ($method === 'POST') {
         $id = 'of_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
         $name = trim($input['name'] ?? 'New Office');
@@ -1388,6 +1948,217 @@ if (preg_match('#^/admin/offices/([^/]+)(?:/(manager))?$#', $apiPath, $m)) {
 // 10. ADMIN: TEAMS MANAGEMENT
 // -----------------------------------------------------------------------------
 if ($apiPath === '/admin/teams') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $includeDeleted = (string)($_GET['include_deleted'] ?? '');
+    if ($includeDeleted !== '' && $actor['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can view deleted teams.'], 403);
+    }
+    if ($method === 'POST') {
+        if (!in_array($actor['role'], ['Super Admin', 'Office Manager'], true)) jsonResponse(['ok' => false, 'error' => 'Your role cannot create teams.'], 403);
+        $name = trim((string)($input['name'] ?? ''));
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'Team name is required.'], 400);
+        $officeId = optionalId($input['office_id'] ?? null);
+        if ($actor['role'] === 'Office Manager') {
+            $officeId = optionalId($actor['office_id'] ?? null);
+            if ($officeId === null) jsonResponse(['ok' => false, 'error' => 'Your account is not assigned to an office.'], 403);
+        }
+        if ($officeId !== null && !activeOffice($pdo, $officeId)) jsonResponse(['ok' => false, 'error' => 'The selected office is unavailable.'], 422);
+        $maxSize = array_key_exists('max_size', $input) ? ($input['max_size'] === null || $input['max_size'] === '' ? null : (int)$input['max_size']) : 10;
+        if ($maxSize !== null && $maxSize < 1) jsonResponse(['ok' => false, 'error' => 'Team capacity must be at least 1 or left unlimited.'], 422);
+        $teamId = 'tm_' . bin2hex(random_bytes(8));
+        $now = date('c');
+        $leader = null;
+        $leaderId = null;
+        $leaderName = trim((string)($input['leader_name'] ?? 'Unassigned')) ?: 'Unassigned';
+        $leaderEmail = strtolower(trim((string)($input['leader_email'] ?? '')));
+        $leaderPassword = (string)($input['leader_password'] ?? '');
+        if ($leaderPassword !== '' && strlen($leaderPassword) < 8) jsonResponse(['ok' => false, 'error' => 'Staff passwords must be at least 8 characters.'], 422);
+        if ($leaderPassword !== '') {
+            if ($leaderName === 'Unassigned') jsonResponse(['ok' => false, 'error' => 'A team leader name is required when setting a password.'], 422);
+            $leaderId = 'adm_' . bin2hex(random_bytes(8));
+            $leaderEmail = $leaderEmail ?: 'leader_' . substr($leaderId, 4) . '@codexdynamics.com';
+            if (!filter_var($leaderEmail, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid team leader email address.'], 422);
+            $q = $pdo->prepare('SELECT id FROM staff_users WHERE LOWER(email) = ?');
+            $q->execute([$leaderEmail]);
+            if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'That email address is already in use.'], 409);
+            $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
+            $hash = password_hash($leaderPassword, PASSWORD_DEFAULT);
+            $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, team_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, 'Team Leader', ?, ?, 'Active', ?, ?)")
+                ->execute([$leaderId, $leaderEmail, $hash, $leaderName, $officeId, $teamId, $caps, $now]);
+            $leader = ['id' => $leaderId, 'name' => $leaderName, 'email' => $leaderEmail, 'role' => 'Team Leader', 'office_id' => $officeId, 'team_id' => $teamId, 'status' => 'Active', 'capabilities' => json_decode($caps, true), 'created_at' => $now];
+        }
+        $pdo->prepare('INSERT INTO teams (id, name, office_id, leader_id, leader_name, max_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            ->execute([$teamId, $name, $officeId, $leaderId, $leader ? $leaderName : null, $maxSize, $now]);
+        jsonResponse(['ok' => true, 'team' => ['id' => $teamId, 'name' => $name, 'office_id' => $officeId, 'leader_id' => $leaderId, 'leader_name' => $leader ? $leaderName : null, 'max_size' => $maxSize, 'agent_count' => 0, 'lead_count' => 0, 'created_at' => $now], 'leader' => $leader], 201);
+    }
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $filter = $includeDeleted === 'only'
+        ? "deleted_at IS NOT NULL AND deleted_scope_type = 'team'"
+        : ($includeDeleted === '1' ? '1=1' : 'deleted_at IS NULL');
+    $params = [];
+    if ($actor['role'] === 'Office Manager') {
+        $officeId = optionalId($actor['office_id'] ?? null);
+        if ($officeId === null) jsonResponse(['ok' => true, 'teams' => []]);
+        $filter .= ' AND office_id = ?';
+        $params[] = $officeId;
+    } elseif ($actor['role'] === 'Team Leader' || $actor['role'] === 'Agent') {
+        $teamId = optionalId($actor['team_id'] ?? null);
+        if ($teamId === null) jsonResponse(['ok' => true, 'teams' => []]);
+        $filter .= ' AND id = ?';
+        $params[] = $teamId;
+    }
+    if ($actor['role'] === 'Super Admin' && !empty($_GET['office_id'])) {
+        $filter .= ' AND office_id = ?';
+        $params[] = (string)$_GET['office_id'];
+    }
+    $stmt = $pdo->prepare("SELECT * FROM teams WHERE {$filter} ORDER BY created_at DESC");
+    $stmt->execute($params);
+    $teams = $stmt->fetchAll();
+    foreach ($teams as &$team) {
+        $q = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE team_id = ? AND role = 'Agent' AND deleted_at IS NULL");
+        $q->execute([$team['id']]);
+        $team['agent_count'] = (int)$q->fetchColumn();
+        $q = $pdo->prepare('SELECT COUNT(*) FROM leads WHERE assigned_team_id = ? AND deleted_at IS NULL');
+        $q->execute([$team['id']]);
+        $team['lead_count'] = (int)$q->fetchColumn();
+    }
+    unset($team);
+    jsonResponse(['ok' => true, 'teams' => $teams]);
+}
+
+if (preg_match('#^/admin/teams/([^/]+)/restore$#', $apiPath, $m) && $method === 'POST') {
+    requireSuperAdmin($pdo, $adminSession);
+    $teamId = rawurldecode($m[1]);
+    $q = $pdo->prepare("SELECT * FROM teams WHERE id = ? AND deleted_at IS NOT NULL AND deleted_scope_type = 'team'");
+    $q->execute([$teamId]);
+    $team = $q->fetch();
+    if (!$team) jsonResponse(['ok' => false, 'error' => 'Deleted team not found. Restore its office first if the office was deleted.'], 404);
+    if (!empty($team['office_id']) && !activeOffice($pdo, (string)$team['office_id'])) jsonResponse(['ok' => false, 'error' => 'Restore the parent office before restoring this team.'], 409);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE teams SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE id = ?')->execute([$teamId]);
+        $pdo->prepare("UPDATE staff_users SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE deleted_scope_type = 'team' AND deleted_scope_id = ?")->execute([$teamId]);
+        $leads = restoreLeadAssignmentSnapshots($pdo, 'team', $teamId);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    $q = $pdo->prepare("SELECT id, name, email, role, office_id, team_id, status, capabilities, last_login_at, created_at FROM staff_users WHERE team_id = ? AND deleted_at IS NULL");
+    $q->execute([$teamId]);
+    jsonResponse(['ok' => true, 'team' => $team, 'staff' => $q->fetchAll(), 'leads' => $leads]);
+}
+
+if (preg_match('#^/admin/teams/([^/]+)$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $teamId = rawurldecode($m[1]);
+    $isPermanent = $method === 'DELETE' && (string)($_GET['permanent'] ?? '') === '1';
+    $q = $pdo->prepare($isPermanent
+        ? "SELECT * FROM teams WHERE id = ? AND deleted_at IS NOT NULL AND deleted_scope_type = 'team'"
+        : 'SELECT * FROM teams WHERE id = ? AND deleted_at IS NULL');
+    $q->execute([$teamId]);
+    $team = $q->fetch();
+    if (!$team) jsonResponse(['ok' => false, 'error' => 'Team not found.'], 404);
+    if ($method === 'PATCH') {
+        if (!in_array($actor['role'], ['Super Admin', 'Office Manager'], true)) jsonResponse(['ok' => false, 'error' => 'Your role cannot edit teams.'], 403);
+        if ($actor['role'] === 'Office Manager' && ($team['office_id'] !== $actor['office_id'] || (isset($input['office_id']) && optionalId($input['office_id']) !== $actor['office_id']))) {
+            jsonResponse(['ok' => false, 'error' => 'You can only edit teams in your office.'], 403);
+        }
+        $newOfficeId = array_key_exists('office_id', $input) ? optionalId($input['office_id']) : optionalId($team['office_id']);
+        if ($newOfficeId !== null && !activeOffice($pdo, $newOfficeId)) jsonResponse(['ok' => false, 'error' => 'The selected office is unavailable.'], 422);
+        $newMaxSize = array_key_exists('max_size', $input)
+            ? ($input['max_size'] === null || $input['max_size'] === '' ? null : (int)$input['max_size'])
+            : ($team['max_size'] === null ? null : (int)$team['max_size']);
+        if ($newMaxSize !== null && $newMaxSize < 1) jsonResponse(['ok' => false, 'error' => 'Team capacity must be at least 1 or left unlimited.'], 422);
+        $q = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE team_id = ? AND role = 'Agent' AND deleted_at IS NULL");
+        $q->execute([$teamId]);
+        if ($newMaxSize !== null && (int)$q->fetchColumn() > $newMaxSize) jsonResponse(['ok' => false, 'error' => 'Capacity cannot be lower than the current number of agents.'], 409);
+        $name = array_key_exists('name', $input) ? trim((string)$input['name']) : $team['name'];
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'Team name is required.'], 422);
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE teams SET name = ?, office_id = ?, max_size = ? WHERE id = ?')->execute([$name, $newOfficeId, $newMaxSize, $teamId]);
+            if ($newOfficeId !== $team['office_id']) {
+                $pdo->prepare('UPDATE staff_users SET office_id = ? WHERE team_id = ? AND deleted_at IS NULL')->execute([$newOfficeId, $teamId]);
+                $pdo->prepare('UPDATE leads SET assigned_office_id = ?, updated_at = ? WHERE assigned_team_id = ? AND deleted_at IS NULL')->execute([$newOfficeId, date('c'), $teamId]);
+            }
+            if (array_key_exists('leader_id', $input)) {
+                $leaderId = optionalId($input['leader_id']);
+                $leader = $leaderId ? activeStaffRecord($pdo, $leaderId) : null;
+                if ($leaderId && (!$leader || $leader['role'] !== 'Team Leader')) {
+                    $pdo->rollBack();
+                    jsonResponse(['ok' => false, 'error' => 'Select an active Team Leader.'], 422);
+                }
+                $pdo->prepare('UPDATE teams SET leader_id = NULL, leader_name = NULL WHERE leader_id = ?')->execute([$leaderId]);
+                if ($leader) {
+                    $pdo->prepare('UPDATE staff_users SET team_id = ?, office_id = ? WHERE id = ?')->execute([$teamId, $newOfficeId, $leaderId]);
+                    $pdo->prepare('UPDATE teams SET leader_id = ?, leader_name = ? WHERE id = ?')->execute([$leaderId, $leader['name'], $teamId]);
+                } elseif (!empty($team['leader_id'])) {
+                    $pdo->prepare('UPDATE staff_users SET team_id = NULL WHERE id = ? AND deleted_at IS NULL')->execute([$team['leader_id']]);
+                }
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        $q = $pdo->prepare('SELECT * FROM teams WHERE id = ?');
+        $q->execute([$teamId]);
+        jsonResponse(['ok' => true, 'team' => $q->fetch()]);
+    }
+    if ($method === 'DELETE') {
+        requireSuperAdmin($pdo, $adminSession);
+        if ($isPermanent) {
+            $q = $pdo->prepare('SELECT id FROM staff_users WHERE team_id = ?');
+            $q->execute([$teamId]);
+            $staffIds = $q->fetchAll(PDO::FETCH_COLUMN);
+            $pdo->beginTransaction();
+            try {
+                $conditions = ['assigned_team_id = ?'];
+                $params = [$teamId];
+                if ($staffIds) {
+                    $in = implode(',', array_fill(0, count($staffIds), '?'));
+                    $conditions[] = "(assigned_agent_id IN ({$in}) OR assigned_team_leader_id IN ({$in}))";
+                    array_push($params, ...$staffIds, ...$staffIds);
+                    $pdo->prepare("DELETE FROM admin_sessions WHERE user_id IN ({$in})")->execute($staffIds);
+                    $pdo->prepare("DELETE FROM staff_users WHERE id IN ({$in})")->execute($staffIds);
+                }
+                $pdo->prepare('UPDATE leads SET assigned_office_id = NULL, assigned_team_id = NULL, assigned_team_leader_id = NULL, assigned_agent_id = NULL, assigned_by = NULL WHERE ' . implode(' OR ', $conditions))->execute($params);
+                $pdo->prepare("DELETE FROM crm_assignment_restore WHERE entity_type = 'team' AND entity_id = ?")->execute([$teamId]);
+                $pdo->prepare('DELETE FROM teams WHERE id = ?')->execute([$teamId]);
+                $pdo->commit();
+            } catch (Throwable $error) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $error;
+            }
+            jsonResponse(['ok' => true]);
+        }
+        $q = $pdo->prepare('SELECT id FROM staff_users WHERE team_id = ? AND deleted_at IS NULL');
+        $q->execute([$teamId]);
+        $staffIds = $q->fetchAll(PDO::FETCH_COLUMN);
+        $conditions = ['assigned_team_id = ?'];
+        $params = [$teamId];
+        if ($staffIds) {
+            $in = implode(',', array_fill(0, count($staffIds), '?'));
+            $conditions[] = "(assigned_agent_id IN ({$in}) OR assigned_team_leader_id IN ({$in}))";
+            array_push($params, ...$staffIds, ...$staffIds);
+        }
+        $now = date('c');
+        $pdo->beginTransaction();
+        try {
+            $leadIds = snapshotAndClearLeadAssignments($pdo, 'team', $teamId, implode(' OR ', $conditions), $params, $actor['id']);
+            $pdo->prepare("UPDATE teams SET deleted_at = ?, deleted_scope_type = 'team', deleted_scope_id = ? WHERE id = ?")->execute([$now, $teamId, $teamId]);
+            $pdo->prepare("UPDATE staff_users SET deleted_at = ?, deleted_scope_type = 'team', deleted_scope_id = ? WHERE team_id = ? AND deleted_at IS NULL")->execute([$now, $teamId, $teamId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'deleted_at' => $now, 'staff_ids' => $staffIds, 'lead_ids' => $leadIds]);
+    }
+}
+
+if ($apiPath === '/admin/teams') {
     if ($method === 'POST') {
         $id = 'tm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
         $name = trim($input['name'] ?? 'New Team');
@@ -1445,6 +2216,268 @@ if (preg_match('#^/admin/teams/([^/]+)$#', $apiPath, $m)) {
 // -----------------------------------------------------------------------------
 // 11. ADMIN: STAFF (AGENTS, TEAM LEADERS, MANAGERS)
 // -----------------------------------------------------------------------------
+if ($apiPath === '/admin/staff') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $includeDeleted = (string)($_GET['include_deleted'] ?? '');
+    if ($includeDeleted !== '' && $actor['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can view deleted staff.'], 403);
+    }
+    if ($method === 'POST') {
+        $role = trim((string)($input['role'] ?? 'Agent'));
+        if (!in_array($role, ['Office Manager', 'Team Leader', 'Agent'], true)) {
+            jsonResponse(['ok' => false, 'error' => 'This role cannot be created through staff management.'], 422);
+        }
+        $name = trim((string)($input['name'] ?? ''));
+        $password = (string)($input['password'] ?? '');
+        if ($name === '' || strlen($password) < 8) jsonResponse(['ok' => false, 'error' => 'A name and a password of at least 8 characters are required.'], 422);
+        $officeId = optionalId($input['office_id'] ?? null);
+        $teamId = optionalId($input['team_id'] ?? null);
+        if ($actor['role'] === 'Office Manager') {
+            if (!in_array($role, ['Team Leader', 'Agent'], true)) jsonResponse(['ok' => false, 'error' => 'Office Managers can only create Team Leaders and Agents.'], 403);
+            $officeId = optionalId($actor['office_id'] ?? null);
+            if ($officeId === null) jsonResponse(['ok' => false, 'error' => 'Your account is not assigned to an office.'], 403);
+            if ($role === 'Team Leader' && $teamId === null) jsonResponse(['ok' => false, 'error' => 'Office Managers must assign a Team Leader to a team.'], 422);
+        } elseif ($actor['role'] === 'Team Leader') {
+            if ($role !== 'Agent' || empty($actor['team_id']) || $teamId !== $actor['team_id'] || (($actor['capabilities']['create_agent'] ?? true) === false)) {
+                jsonResponse(['ok' => false, 'error' => 'You can only create agents in your team.'], 403);
+            }
+            $officeId = optionalId($actor['office_id'] ?? null);
+        } elseif ($actor['role'] !== 'Super Admin') {
+            jsonResponse(['ok' => false, 'error' => 'Your role cannot create staff.'], 403);
+        }
+
+        $team = $teamId ? activeTeam($pdo, $teamId) : null;
+        if ($teamId && !$team) jsonResponse(['ok' => false, 'error' => 'The selected team is unavailable.'], 422);
+        if ($team && !empty($team['office_id'])) {
+            if ($officeId !== null && $officeId !== $team['office_id']) jsonResponse(['ok' => false, 'error' => 'The selected team belongs to a different office.'], 422);
+            $officeId = (string)$team['office_id'];
+        }
+        if ($officeId !== null && !activeOffice($pdo, $officeId)) jsonResponse(['ok' => false, 'error' => 'The selected office is unavailable.'], 422);
+        if ($role === 'Office Manager' && ($officeId === null || $teamId !== null)) jsonResponse(['ok' => false, 'error' => 'An Office Manager must be assigned to one active office and no team.'], 422);
+        if ($role === 'Team Leader' && $teamId !== null) {
+            $q = $pdo->prepare("SELECT id FROM staff_users WHERE team_id = ? AND role = 'Team Leader' AND deleted_at IS NULL");
+            $q->execute([$teamId]);
+            if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'This team already has a Team Leader.'], 409);
+        }
+        if ($role === 'Agent' && $team && $team['max_size'] !== null) {
+            $q = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE team_id = ? AND role = 'Agent' AND deleted_at IS NULL");
+            $q->execute([$teamId]);
+            if ((int)$q->fetchColumn() >= (int)$team['max_size']) jsonResponse(['ok' => false, 'error' => 'This team is at capacity.'], 409);
+        }
+        $email = strtolower(trim((string)($input['email'] ?? '')));
+        $id = 'adm_' . bin2hex(random_bytes(8));
+        $email = $email ?: strtolower($role === 'Agent' ? 'agent_' : ($role === 'Team Leader' ? 'leader_' : 'manager_')) . substr($id, 4) . '@codexdynamics.com';
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 422);
+        $q = $pdo->prepare('SELECT id FROM staff_users WHERE LOWER(email) = ?');
+        $q->execute([$email]);
+        if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'That email address is already in use.'], 409);
+        if ($role === 'Office Manager') {
+            $q = $pdo->prepare('SELECT id FROM offices WHERE id = ? AND manager_id IS NOT NULL AND deleted_at IS NULL');
+            $q->execute([$officeId]);
+            if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'This office already has an Office Manager.'], 409);
+        }
+        $now = date('c');
+        $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
+        $hash = password_hash($password, PASSWORD_DEFAULT);
+        if ($hash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the staff password.'], 500);
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, team_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)")
+                ->execute([$id, $email, $hash, $name, $role, $officeId, $teamId, $caps, $now]);
+            if ($role === 'Team Leader' && $teamId !== null) {
+                $pdo->prepare('UPDATE teams SET leader_id = ?, leader_name = ? WHERE id = ?')->execute([$id, $name, $teamId]);
+            }
+            if ($role === 'Office Manager') {
+                $pdo->prepare('UPDATE offices SET manager_id = ?, manager_name = ?, manager_email = ? WHERE id = ?')->execute([$id, $name, $email, $officeId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'staff' => publicStaffRecord($pdo, $id)], 201);
+    }
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $filter = $includeDeleted === 'only'
+        ? "s.deleted_at IS NOT NULL AND s.deleted_scope_type = 'staff'"
+        : ($includeDeleted === '1' ? '1=1' : 's.deleted_at IS NULL');
+    $params = [];
+    if ($actor['role'] === 'Office Manager') {
+        $officeId = optionalId($actor['office_id'] ?? null);
+        if ($officeId === null) jsonResponse(['ok' => true, 'staff' => []]);
+        $filter .= ' AND s.office_id = ?';
+        $params[] = $officeId;
+    } elseif ($actor['role'] === 'Team Leader') {
+        if (empty($actor['team_id'])) $filter .= ' AND s.id = ?';
+        else $filter .= ' AND (s.id = ? OR s.team_id = ?)';
+        $params[] = $actor['id'];
+        if (!empty($actor['team_id'])) $params[] = $actor['team_id'];
+    } elseif ($actor['role'] === 'Agent') {
+        $filter .= ' AND s.id = ?';
+        $params[] = $actor['id'];
+    }
+    $sql = "
+        SELECT s.id, s.email, s.name, s.role, s.office_id, s.team_id, s.status, s.capabilities,
+               s.last_login_at, s.created_at, s.deleted_at, s.deleted_scope_type, s.deleted_scope_id,
+               o.name AS office_name, t.name AS team_name,
+               (SELECT COUNT(*) FROM leads l WHERE l.deleted_at IS NULL AND (l.assigned_agent_id = s.id OR l.assigned_team_leader_id = s.id)) AS lead_count
+        FROM staff_users s
+        LEFT JOIN offices o ON o.id = s.office_id
+        LEFT JOIN teams t ON t.id = s.team_id
+        WHERE {$filter} ORDER BY s.name ASC
+    ";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $staff = $stmt->fetchAll();
+    foreach ($staff as &$member) $member['capabilities'] = json_decode((string)($member['capabilities'] ?? '{}'), true) ?: [];
+    unset($member);
+    jsonResponse(['ok' => true, 'staff' => $staff]);
+}
+
+if (preg_match('#^/admin/staff/([^/]+)/restore$#', $apiPath, $m) && $method === 'POST') {
+    requireSuperAdmin($pdo, $adminSession);
+    $staffId = rawurldecode($m[1]);
+    $q = $pdo->prepare("SELECT id FROM staff_users WHERE id = ? AND deleted_at IS NOT NULL AND deleted_scope_type = 'staff'");
+    $q->execute([$staffId]);
+    if (!$q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Deleted staff member not found.'], 404);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE staff_users SET deleted_at = NULL, deleted_scope_type = NULL, deleted_scope_id = NULL WHERE id = ?')->execute([$staffId]);
+        $leads = restoreLeadAssignmentSnapshots($pdo, 'staff', $staffId);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'staff' => publicStaffRecord($pdo, $staffId), 'leads' => $leads]);
+}
+
+if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $staffId = rawurldecode($m[1]);
+    $action = $m[2] ?? '';
+    $permanent = $method === 'DELETE' && (string)($_GET['permanent'] ?? '') === '1';
+    $q = $pdo->prepare($permanent
+        ? "SELECT * FROM staff_users WHERE id = ? AND deleted_at IS NOT NULL AND deleted_scope_type = 'staff'"
+        : 'SELECT * FROM staff_users WHERE id = ? AND deleted_at IS NULL');
+    $q->execute([$staffId]);
+    $target = $q->fetch();
+    if (!$target) jsonResponse(['ok' => false, 'error' => 'Staff member not found.'], 404);
+
+    if (($action === 'block' || $action === 'unblock') && $method === 'POST') {
+        if (!canManageStaffStatus($actor, $target)) jsonResponse(['ok' => false, 'error' => 'You cannot change this staff member’s access.'], 403);
+        $status = $action === 'block' ? 'Suspended' : 'Active';
+        $pdo->prepare('UPDATE staff_users SET status = ? WHERE id = ?')->execute([$status, $staffId]);
+        if ($action === 'block') $pdo->prepare('DELETE FROM admin_sessions WHERE user_id = ?')->execute([$staffId]);
+        jsonResponse(['ok' => true, 'staff' => publicStaffRecord($pdo, $staffId)]);
+    }
+    if ($method === 'PATCH') {
+        if (!canManageStaffRecord($actor, $target)) jsonResponse(['ok' => false, 'error' => 'You cannot edit this staff member.'], 403);
+        $isSelf = $actor['id'] === $staffId;
+        if (!$isSelf && $actor['role'] !== 'Super Admin' && (array_key_exists('office_id', $input) || array_key_exists('team_id', $input))) {
+            jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can move staff between offices or teams.'], 403);
+        }
+        $name = array_key_exists('name', $input) ? trim((string)$input['name']) : $target['name'];
+        if ($name === '') jsonResponse(['ok' => false, 'error' => 'Staff name is required.'], 422);
+        $email = array_key_exists('email', $input) ? strtolower(trim((string)$input['email'])) : $target['email'];
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 422);
+        $q = $pdo->prepare('SELECT id FROM staff_users WHERE LOWER(email) = ? AND id <> ?');
+        $q->execute([$email, $staffId]);
+        if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'That email address is already in use.'], 409);
+        $passwordHash = null;
+        if (isset($input['password']) && (string)$input['password'] !== '') {
+            if (strlen((string)$input['password']) < 8) jsonResponse(['ok' => false, 'error' => 'Staff passwords must be at least 8 characters.'], 422);
+            $passwordHash = password_hash((string)$input['password'], PASSWORD_DEFAULT);
+        }
+        $officeId = optionalId($input['office_id'] ?? $target['office_id']);
+        $teamId = optionalId($input['team_id'] ?? $target['team_id']);
+        if ($actor['role'] !== 'Super Admin' || $isSelf) {
+            $officeId = optionalId($target['office_id']);
+            $teamId = optionalId($target['team_id']);
+        }
+        $team = $teamId ? activeTeam($pdo, $teamId) : null;
+        if ($teamId && !$team) jsonResponse(['ok' => false, 'error' => 'The selected team is unavailable.'], 422);
+        if ($team && !empty($team['office_id'])) {
+            if ($officeId !== null && $officeId !== $team['office_id']) jsonResponse(['ok' => false, 'error' => 'The selected team belongs to a different office.'], 422);
+            $officeId = (string)$team['office_id'];
+        }
+        if ($officeId !== null && !activeOffice($pdo, $officeId)) jsonResponse(['ok' => false, 'error' => 'The selected office is unavailable.'], 422);
+        if ($target['role'] === 'Office Manager' && $teamId !== null) jsonResponse(['ok' => false, 'error' => 'An Office Manager cannot be assigned to a team.'], 422);
+        if ($target['role'] === 'Agent' && $team && $team['max_size'] !== null && $teamId !== $target['team_id']) {
+            $q = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE team_id = ? AND role = 'Agent' AND deleted_at IS NULL AND id <> ?");
+            $q->execute([$teamId, $staffId]);
+            if ((int)$q->fetchColumn() >= (int)$team['max_size']) jsonResponse(['ok' => false, 'error' => 'This team is at capacity.'], 409);
+        }
+        if ($target['role'] === 'Team Leader' && $teamId !== null) {
+            $q = $pdo->prepare("SELECT id FROM staff_users WHERE team_id = ? AND role = 'Team Leader' AND deleted_at IS NULL AND id <> ?");
+            $q->execute([$teamId, $staffId]);
+            if ($q->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'This team already has a Team Leader.'], 409);
+        }
+        $now = date('c');
+        $pdo->beginTransaction();
+        try {
+            $sql = 'UPDATE staff_users SET name = ?, email = ?, office_id = ?, team_id = ?';
+            $params = [$name, $email, $officeId, $teamId];
+            if ($passwordHash !== null) {
+                $sql .= ', password = ?';
+                $params[] = $passwordHash;
+            }
+            $sql .= ' WHERE id = ?';
+            $params[] = $staffId;
+            $pdo->prepare($sql)->execute($params);
+            if ($target['role'] === 'Team Leader') {
+                $pdo->prepare('UPDATE teams SET leader_id = NULL, leader_name = NULL WHERE leader_id = ?')->execute([$staffId]);
+                if ($teamId !== null) $pdo->prepare('UPDATE teams SET leader_id = ?, leader_name = ? WHERE id = ?')->execute([$staffId, $name, $teamId]);
+                $pdo->prepare('UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, updated_at = ? WHERE assigned_team_leader_id = ? AND assigned_agent_id IS NULL AND deleted_at IS NULL')
+                    ->execute([$officeId, $teamId, $now, $staffId]);
+            } elseif ($target['role'] === 'Agent') {
+                $pdo->prepare('UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, updated_at = ? WHERE assigned_agent_id = ? AND deleted_at IS NULL')
+                    ->execute([$officeId, $teamId, $now, $staffId]);
+            } elseif ($target['role'] === 'Office Manager') {
+                $pdo->prepare('UPDATE offices SET manager_id = NULL WHERE manager_id = ?')->execute([$staffId]);
+                if ($officeId !== null) $pdo->prepare('UPDATE offices SET manager_id = ?, manager_name = ?, manager_email = ? WHERE id = ?')->execute([$staffId, $name, $email, $officeId]);
+            }
+            if ($target['role'] === 'Team Leader') $pdo->prepare('UPDATE teams SET leader_name = ? WHERE leader_id = ?')->execute([$name, $staffId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'staff' => publicStaffRecord($pdo, $staffId)]);
+    }
+    if ($method === 'DELETE') {
+        requireSuperAdmin($pdo, $adminSession);
+        if ($permanent) {
+            $pdo->beginTransaction();
+            try {
+                $pdo->prepare('UPDATE leads SET assigned_office_id = NULL, assigned_team_id = NULL, assigned_team_leader_id = NULL, assigned_agent_id = NULL, assigned_by = NULL WHERE assigned_agent_id = ? OR assigned_team_leader_id = ?')->execute([$staffId, $staffId]);
+                $pdo->prepare('UPDATE teams SET leader_id = NULL, leader_name = NULL WHERE leader_id = ?')->execute([$staffId]);
+                $pdo->prepare('UPDATE offices SET manager_id = NULL, manager_name = ?, manager_email = ? WHERE manager_id = ?')->execute(['Unassigned', '', $staffId]);
+                $pdo->prepare('DELETE FROM admin_sessions WHERE user_id = ?')->execute([$staffId]);
+                $pdo->prepare("DELETE FROM crm_assignment_restore WHERE entity_type = 'staff' AND entity_id = ?")->execute([$staffId]);
+                $pdo->prepare('DELETE FROM staff_users WHERE id = ?')->execute([$staffId]);
+                $pdo->commit();
+            } catch (Throwable $error) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $error;
+            }
+            jsonResponse(['ok' => true]);
+        }
+        $now = date('c');
+        $pdo->beginTransaction();
+        try {
+            $leadIds = snapshotAndClearLeadAssignments($pdo, 'staff', $staffId, '(assigned_agent_id = ? OR assigned_team_leader_id = ?)', [$staffId, $staffId], $actor['id']);
+            $pdo->prepare("UPDATE staff_users SET deleted_at = ?, deleted_scope_type = 'staff', deleted_scope_id = ? WHERE id = ?")->execute([$now, $staffId, $staffId]);
+            $pdo->prepare('DELETE FROM admin_sessions WHERE user_id = ?')->execute([$staffId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'deleted_at' => $now, 'lead_ids' => $leadIds]);
+    }
+}
+
 if ($apiPath === '/admin/staff') {
     if ($method === 'POST') {
         $id = 'adm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
@@ -1505,20 +2538,94 @@ if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
 // -----------------------------------------------------------------------------
 // 12. ADMIN: LEAD ASSIGNMENT
 // -----------------------------------------------------------------------------
+if (preg_match('#^/admin/leads/(?:assign-bulk|bulk-assign)$#', $apiPath) && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can bulk assign leads.'], 403);
+    if (isset($input['assignments'])) {
+        if (!is_array($input['assignments']) || count($input['assignments']) === 0 || count($input['assignments']) > 5000) {
+            jsonResponse(['ok' => false, 'error' => 'Provide between 1 and 5,000 lead assignments.'], 400);
+        }
+        $prepared = [];
+        $seen = [];
+        $lookup = $pdo->prepare('SELECT id FROM leads WHERE id = ? AND deleted_at IS NULL');
+        foreach ($input['assignments'] as $entry) {
+            if (!is_array($entry)) jsonResponse(['ok' => false, 'error' => 'An assignment entry is invalid.'], 400);
+            $leadId = trim((string)($entry['lead_id'] ?? $entry['leadId'] ?? ''));
+            if ($leadId === '' || isset($seen[$leadId])) jsonResponse(['ok' => false, 'error' => 'Each lead must appear exactly once in the assignment list.'], 422);
+            $seen[$leadId] = true;
+            $lookup->execute([$leadId]);
+            if (!$lookup->fetchColumn()) jsonResponse(['ok' => false, 'error' => "Lead {$leadId} is unavailable."], 404);
+            $prepared[] = [
+                'lead_id' => $leadId,
+                'assignment' => validateLeadAssignment($pdo, [
+                    'office_id' => $entry['assigned_office_id'] ?? $entry['officeId'] ?? $entry['office_id'] ?? null,
+                    'team_id' => $entry['assigned_team_id'] ?? $entry['teamId'] ?? $entry['team_id'] ?? null,
+                    'team_leader_id' => $entry['assigned_team_leader_id'] ?? $entry['teamLeaderId'] ?? $entry['team_leader_id'] ?? null,
+                    'agent_id' => $entry['assigned_agent_id'] ?? $entry['agentId'] ?? $entry['agent_id'] ?? null,
+                ]),
+            ];
+        }
+        $pdo->beginTransaction();
+        try {
+            $updated = [];
+            foreach ($prepared as $entry) $updated[] = normalizeLeadRow(saveLeadAssignment($pdo, $entry['lead_id'], $entry['assignment'], $actor));
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'updated' => count($updated), 'leads' => $updated]);
+    }
+    $leadIds = $input['lead_ids'] ?? $input['ids'] ?? [];
+    if (!is_array($leadIds) || count($leadIds) === 0) jsonResponse(['ok' => false, 'error' => 'Select at least one lead.'], 400);
+    $leadIds = array_values(array_unique(array_filter(array_map(static fn($id) => trim((string)$id), $leadIds))));
+    $officeId = $input['assigned_office_id'] ?? $input['officeId'] ?? $input['office_id'] ?? null;
+    $teamId = $input['assigned_team_id'] ?? $input['teamId'] ?? $input['team_id'] ?? null;
+    $teamLeaderId = $input['assigned_team_leader_id'] ?? $input['teamLeaderId'] ?? $input['team_leader_id'] ?? null;
+    $agentId = $input['assigned_agent_id'] ?? $input['agentId'] ?? $input['agent_id'] ?? null;
+    $assignment = validateLeadAssignment($pdo, ['office_id' => $officeId, 'team_id' => $teamId, 'team_leader_id' => $teamLeaderId, 'agent_id' => $agentId]);
+    $leadRows = [];
+    $leadLookup = $pdo->prepare('SELECT id FROM leads WHERE id = ? AND deleted_at IS NULL');
+    foreach ($leadIds as $leadId) {
+        $leadLookup->execute([$leadId]);
+        if (!$leadLookup->fetchColumn()) jsonResponse(['ok' => false, 'error' => "Lead {$leadId} is unavailable."], 404);
+        $leadRows[] = $leadId;
+    }
+    $pdo->beginTransaction();
+    try {
+        $updated = [];
+        foreach ($leadRows as $leadId) $updated[] = normalizeLeadRow(saveLeadAssignment($pdo, $leadId, $assignment, $actor));
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'updated' => count($updated), 'leads' => $updated]);
+}
+
 if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
     $leadId = $m[1];
     $officeId = $input['assigned_office_id'] ?? $input['officeId'] ?? $input['office_id'] ?? null;
     $teamId = $input['assigned_team_id'] ?? $input['teamId'] ?? $input['team_id'] ?? null;
     $teamLeaderId = $input['assigned_team_leader_id'] ?? $input['teamLeaderId'] ?? $input['team_leader_id'] ?? null;
     $agentId = $input['assigned_agent_id'] ?? $input['agentId'] ?? $input['agent_id'] ?? null;
-    $now = date('c');
-
-    $pdo->prepare("UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_team_leader_id = ?, assigned_agent_id = ?, updated_at = ? WHERE id = ?")
-        ->execute([$officeId, $teamId, $teamLeaderId, $agentId, $now, $leadId]);
-
-    $stmtL = $pdo->prepare("SELECT * FROM leads WHERE id = ?");
-    $stmtL->execute([$leadId]);
-    jsonResponse(['ok' => true, 'lead' => $stmtL->fetch()]);
+    $stmt = $pdo->prepare('SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL');
+    $stmt->execute([$leadId]);
+    $lead = $stmt->fetch();
+    if (!$lead) jsonResponse(['ok' => false, 'error' => 'Lead not found.'], 404);
+    if (!actorCanViewLead($actor, $lead)) jsonResponse(['ok' => false, 'error' => 'You cannot access this lead.'], 403);
+    $assignment = validateLeadAssignment($pdo, ['office_id' => $officeId, 'team_id' => $teamId, 'team_leader_id' => $teamLeaderId, 'agent_id' => $agentId]);
+    assertCanAssignLead($actor, $assignment, $pdo);
+    $pdo->beginTransaction();
+    try {
+        $updated = saveLeadAssignment($pdo, $leadId, $assignment, $actor);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($updated)]);
 }
 
 // -----------------------------------------------------------------------------

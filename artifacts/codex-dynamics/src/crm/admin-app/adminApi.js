@@ -1011,6 +1011,7 @@ function mapOfficeRow(o) {
     leadCount:   o.lead_count ?? 0,
     createdAt:   o.created_at ?? null,
     deletedAt:   o.deleted_at ?? null,
+    deletedScopeType: o.deleted_scope_type ?? null,
   };
 }
 
@@ -1021,11 +1022,12 @@ function mapTeamRow(t) {
     officeId:   t.office_id,
     leaderId:   t.leader_id ?? null,
     leaderName: t.leader_name ?? null,
-    maxSize:    t.max_size ?? 10,
+    maxSize:    t.max_size == null ? null : Number(t.max_size),
     agentCount: t.agent_count ?? 0,
     leadCount:  t.lead_count ?? 0,
     createdAt:  t.created_at ?? null,
     deletedAt:  t.deleted_at ?? null,
+    deletedScopeType: t.deleted_scope_type ?? null,
   };
 }
 
@@ -1043,13 +1045,12 @@ function mapStaffRow(s) {
     lastLoginAt: s.last_login_at ?? null,
     createdAt:   s.created_at ?? null,
     leadCount:   s.lead_count ?? 0,
+    deletedAt:   s.deleted_at ?? null,
+    deletedScopeType: s.deleted_scope_type ?? null,
     // Frontend convenience: panels render `isLoggedIn` as a coloured dot.
     // Real admins are "logged in" only inside their own browser session, so
     // this is always false from a remote-list perspective.
     isLoggedIn:  false,
-    // plain_password is stored alongside the bcrypt hash so Super Admin
-    // can view credentials in the CRM panel (mirrors client_password on leads).
-    password:    s.plain_password ?? '',
   };
 }
 
@@ -1091,7 +1092,13 @@ export async function deleteOffice(id) {
 }
 
 export async function restoreOfficeApi(id) {
-  return adminFetch(`/api/admin/offices/${encodeURIComponent(id)}/restore`, { method: 'POST', body: {} });
+  const res = await adminFetch(`/api/admin/offices/${encodeURIComponent(id)}/restore`, { method: 'POST', body: {} });
+  return {
+    office: mapOfficeRow(res.office),
+    teams: (res.teams || []).map(mapTeamRow),
+    staff: (res.staff || []).map(mapStaffRow),
+    leads: (res.leads || []).map(mapLeadRow),
+  };
 }
 
 export async function deleteOfficePermanent(id) {
@@ -1136,10 +1143,14 @@ export async function createTeam({ officeId, name, maxSize, leaderName, leaderPa
   };
 }
 
-export async function updateTeam(id, { name, maxSize }) {
+export async function updateTeam(id, updates = {}) {
   const body = {};
-  if (name    != null) body.name     = name;
-  if (maxSize != null) body.max_size = Number(maxSize);
+  if (updates.name != null) body.name = updates.name;
+  if (Object.prototype.hasOwnProperty.call(updates, 'maxSize')) {
+    body.max_size = updates.maxSize === '' ? null : updates.maxSize == null ? null : Number(updates.maxSize);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'officeId')) body.office_id = updates.officeId || null;
+  if (Object.prototype.hasOwnProperty.call(updates, 'leaderId')) body.leader_id = updates.leaderId || null;
   const res = await adminFetch(`/api/admin/teams/${id}`, { method: 'PATCH', body });
   return mapTeamRow(res.team);
 }
@@ -1149,7 +1160,12 @@ export async function deleteTeam(id) {
 }
 
 export async function restoreTeamApi(id) {
-  return adminFetch(`/api/admin/teams/${encodeURIComponent(id)}/restore`, { method: 'POST', body: {} });
+  const res = await adminFetch(`/api/admin/teams/${encodeURIComponent(id)}/restore`, { method: 'POST', body: {} });
+  return {
+    team: mapTeamRow(res.team),
+    staff: (res.staff || []).map(mapStaffRow),
+    leads: (res.leads || []).map(mapLeadRow),
+  };
 }
 
 export async function deleteTeamPermanent(id) {
@@ -1160,8 +1176,12 @@ export async function deleteTeamPermanent(id) {
 // Staff (admin accounts)
 // ---------------------------------------------------------------------------
 
-export async function listStaff() {
-  const { staff } = await adminFetch('/api/admin/staff');
+export async function listStaff({ includeDeleted } = {}) {
+  const params = new URLSearchParams();
+  if (includeDeleted === 'only') params.set('include_deleted', 'only');
+  else if (includeDeleted) params.set('include_deleted', '1');
+  const qs = params.toString();
+  const { staff } = await adminFetch(`/api/admin/staff${qs ? `?${qs}` : ''}`);
   return (staff || []).map(mapStaffRow);
 }
 
@@ -1212,9 +1232,14 @@ export async function unblockStaffApi(id) {
   return res.staff;
 }
 
-export async function deleteStaffApi(id) {
-  const res = await adminFetch(`/api/admin/staff/${id}`, { method: 'DELETE' });
-  return res.staff;
+export async function restoreStaffApi(id) {
+  const res = await adminFetch(`/api/admin/staff/${encodeURIComponent(id)}/restore`, { method: 'POST', body: {} });
+  return { staff: mapStaffRow(res.staff), leads: (res.leads || []).map(mapLeadRow) };
+}
+
+export async function deleteStaffApi(id, { permanent = false } = {}) {
+  const suffix = permanent ? '?permanent=1' : '';
+  return adminFetch(`/api/admin/staff/${encodeURIComponent(id)}${suffix}`, { method: 'DELETE' });
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,6 +1529,22 @@ export async function bulkAssignLeadsApi(leadIds, { officeId, teamId, agentId } 
   if (teamId   !== undefined) body.assigned_team_id   = teamId;
   if (agentId  !== undefined) body.assigned_agent_id  = agentId;
   return adminFetch('/api/admin/leads/assign-bulk', { method: 'POST', body });
+}
+
+export async function bulkAssignLeadAssignmentsApi(assignments) {
+  const res = await adminFetch('/api/admin/leads/assign-bulk', {
+    method: 'POST',
+    body: {
+      assignments: (assignments || []).map((entry) => ({
+        lead_id: entry.leadId,
+        assigned_office_id: entry.officeId ?? null,
+        assigned_team_id: entry.teamId ?? null,
+        assigned_team_leader_id: entry.teamLeaderId ?? null,
+        assigned_agent_id: entry.agentId ?? null,
+      })),
+    },
+  });
+  return { ...res, leads: (res.leads || []).map(mapLeadRow) };
 }
 
 // ---------------------------------------------------------------------------

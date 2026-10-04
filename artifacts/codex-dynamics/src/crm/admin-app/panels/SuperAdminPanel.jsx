@@ -33,11 +33,11 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import {
   getAdminToken, getUserProfileHistoryApi,
-  bulkAssignLeadsApi, deleteOffice, deleteTeam, deleteStaffApi, updateOffice, updateTeam,
+  bulkAssignLeadsApi, bulkAssignLeadAssignmentsApi, deleteOffice, deleteTeam, deleteStaffApi, updateOffice, updateTeam,
   updateStaffApi, resetLeadStatusApi, clearLeadCommentsApi,
   updateLeadApi, deleteLeadApi, restoreLeadApi,
   getLeadNotificationsAsAdmin, getAdminPendingCounts,
-  restoreOfficeApi, restoreTeamApi, deleteOfficePermanent, deleteTeamPermanent,
+  restoreOfficeApi, restoreTeamApi, restoreStaffApi, deleteOfficePermanent, deleteTeamPermanent,
   blockStaffApi, unblockStaffApi,
   listRecentAuditLog,
   deleteProfileHistoryEntryApi, clearProfileHistoryApi,
@@ -196,6 +196,9 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     let officeId = bulkOfficeId || null;
     let teamId = bulkTeamId || null;
     let agentId = bulkAgentId || null;
+    const previousLeads = data.leads;
+    const previousSelection = [...selected];
+    const previousBulkState = { mode: bulkMode, officeId: bulkOfficeId, teamId: bulkTeamId, agentId: bulkAgentId };
     if (agentId) {
       const agent = data.users.find(u => u.id === agentId);
       if (agent) { teamId = teamId || agent.teamId; officeId = officeId || agent.officeId; }
@@ -216,10 +219,23 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     setBulkOfficeId(''); setBulkTeamId(''); setBulkAgentId('');
     setBulkMode(null);
     try {
-      await bulkAssignLeadsApi(selected, { officeId, teamId, agentId });
+      const result = await bulkAssignLeadsApi(selected, { officeId, teamId, agentId });
+      if (result.leads?.length) {
+        const updatedIds = new Set(result.leads.map((lead) => lead.id));
+        setData((prev) => ({
+          ...prev,
+          leads: [...prev.leads.filter((lead) => !updatedIds.has(lead.id)), ...result.leads],
+        }));
+      }
       showNotification(`${selected.length} lead(s) reassigned.`);
     } catch (err) {
-      showNotification('Bulk assign failed - please try again.');
+      setData((prev) => ({ ...prev, leads: previousLeads }));
+      setSelected(previousSelection);
+      setBulkOfficeId(previousBulkState.officeId);
+      setBulkTeamId(previousBulkState.teamId);
+      setBulkAgentId(previousBulkState.agentId);
+      setBulkMode(previousBulkState.mode || 'assign');
+      showNotification(err.message || 'Bulk assign failed; no changes were saved.');
     }
   };
 
@@ -561,11 +577,20 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     setShuffleStatus('');
     setBulkMode(null);
 
-    // One bulk API call per target group, all fired in parallel
+    // Send every shuffled destination in one transaction so a partial network
+    // failure cannot leave only some groups assigned.
     try {
-      await Promise.all([...groups.values()].map(({ leadIds, officeId, teamId, agentId }) =>
-        bulkAssignLeadsApi(leadIds, { officeId, teamId, agentId })
-      ));
+      const assignments = [...groups.values()].flatMap(({ leadIds, officeId, teamId, agentId }) =>
+        leadIds.map((leadId) => ({ leadId, officeId, teamId, agentId }))
+      );
+      const result = await bulkAssignLeadAssignmentsApi(assignments);
+      if (result.leads?.length) {
+        const savedById = new Map(result.leads.map((lead) => [lead.id, lead]));
+        setData((prev) => ({
+          ...prev,
+          leads: prev.leads.map((lead) => savedById.get(lead.id) || lead),
+        }));
+      }
       showNotification(`Shuffled ${pool.length} lead(s) across ${shuffleTargets.length} ${shuffleScope}.`);
     } catch (err) {
       // Roll back the optimistic update so the UI reflects actual server state
@@ -2108,25 +2133,38 @@ function RecycleBin({ data, setData, showNotification }) {
     });
   };
   const restoreItem = async (entry) => {
-    const snapshot = data;
-    setData(prev => {
-      const next = { ...prev, recycleBin: (prev.recycleBin || []).filter(e => e.id !== entry.id) };
-      if (entry.type === 'office') next.offices = [...(prev.offices || []), entry.item];
-      else if (entry.type === 'team') next.teams = [...(prev.teams || []), entry.item];
-      else if (entry.type === 'agent' || entry.type === 'user') {
-        next.users = [...(prev.users || []), { ...entry.item, status: 'Active' }];
-      }
-      return next;
-    });
-    showNotification(`Restored ${entry.type}.`);
     try {
-      if (entry.type === 'office') await restoreOfficeApi(entry.id);
-      else if (entry.type === 'team') await restoreTeamApi(entry.id);
-      else if (entry.type === 'agent' || entry.type === 'user') await unblockStaffApi(entry.id);
+      let restored;
+      if (entry.type === 'office') restored = await restoreOfficeApi(entry.id);
+      else if (entry.type === 'team') restored = await restoreTeamApi(entry.id);
+      else if (entry.type === 'agent' || entry.type === 'user') restored = await restoreStaffApi(entry.id);
+      else return;
+      setData((prev) => {
+        const mergeById = (current, additions) => {
+          const rows = new Map((current || []).map((row) => [row.id, row]));
+          (additions || []).forEach((row) => rows.set(row.id, row));
+          return [...rows.values()];
+        };
+        const leads = restored.leads || [];
+        const restoredLeadIds = new Set(leads.map((lead) => lead.id));
+        const restoredStaff = Array.isArray(restored.staff)
+          ? restored.staff
+          : restored.staff ? [restored.staff] : [];
+        return {
+          ...prev,
+          recycleBin: (prev.recycleBin || []).filter((item) => item.id !== entry.id),
+          offices: restored.office ? mergeById(prev.offices, [restored.office]) : prev.offices,
+          teams: mergeById(prev.teams, restored.teams || (restored.team ? [restored.team] : [])),
+          users: mergeById(prev.users, restoredStaff),
+          leads: leads.length
+            ? [...(prev.leads || []).filter((lead) => !restoredLeadIds.has(lead.id)), ...leads]
+            : prev.leads,
+        };
+      });
+      showNotification(`Restored ${entry.type}.`);
     } catch (err) {
       console.error('[RecycleBin] restoreItem failed', err);
       showNotification(`Could not restore ${entry.type} on the server.`);
-      setData(snapshot);
     }
   };
   const purgeItem = async (entry) => {
@@ -2137,18 +2175,15 @@ function RecycleBin({ data, setData, showNotification }) {
       tone: 'danger',
     });
     if (!ok) return;
-    setData(prev => ({ ...prev, recycleBin: (prev.recycleBin || []).filter(e => e.id !== entry.id) }));
-    showNotification(`${entry.type} permanently removed.`);
-    const apiCall =
-      entry.type === 'office' ? deleteOfficePermanent(entry.id) :
-      entry.type === 'team'   ? deleteTeamPermanent(entry.id) :
-      (entry.type === 'agent' || entry.type === 'user') ? deleteStaffApi(entry.id) : null;
-    if (apiCall) {
-      apiCall.catch(err => {
-        console.error('[RecycleBin] purgeItem backend failed', err);
-        showNotification(`Could not permanently delete ${entry.type} on the server.`);
-        setData(prev => ({ ...prev, recycleBin: [...(prev.recycleBin || []), entry] }));
-      });
+    try {
+      if (entry.type === 'office') await deleteOfficePermanent(entry.id);
+      else if (entry.type === 'team') await deleteTeamPermanent(entry.id);
+      else if (entry.type === 'agent' || entry.type === 'user') await deleteStaffApi(entry.id, { permanent: true });
+      setData(prev => ({ ...prev, recycleBin: (prev.recycleBin || []).filter(e => e.id !== entry.id) }));
+      showNotification(`${entry.type} permanently removed.`);
+    } catch (err) {
+      console.error('[RecycleBin] purgeItem backend failed', err);
+      showNotification(`Could not permanently delete ${entry.type} on the server.`);
     }
   };
   const emptyAll = async () => {
@@ -2159,31 +2194,29 @@ function RecycleBin({ data, setData, showNotification }) {
       tone: 'danger',
     });
     if (!ok) return;
-    // Snapshot before optimistic clear so we can roll back on partial failure.
     const toPurgeLeads = (data.deletedLeads || []).map((l) => l.id);
     const toPurgeBin   = [...(data.recycleBin  || [])];
-    setData(prev => ({ ...prev, deletedLeads: [], recycleBin: [] }));
-    showNotification('Recycle bin emptied.');
-    // Single bulk-purge call for all leads (replaces N individual deletes).
-    // purgeBinLeads accepts an ids array and hard-deletes them in one SQL tx.
-    const leadPurge = toPurgeLeads.length > 0
-      ? purgeBinLeads(toPurgeLeads)
-      : Promise.resolve();
-    // Offices, teams, and agents still go through their individual endpoints
-    // (they live in separate tables with their own cascade rules).
+    const leadPurge = toPurgeLeads.length > 0 ? purgeBinLeads(toPurgeLeads) : Promise.resolve();
     const binDeletes = toPurgeBin.map((entry) => {
       if (entry.type === 'office') return deleteOfficePermanent(entry.id);
-      if (entry.type === 'team')   return deleteTeamPermanent(entry.id);
-      if (entry.type === 'agent' || entry.type === 'user') return deleteStaffApi(entry.id);
+      if (entry.type === 'team') return deleteTeamPermanent(entry.id);
+      if (entry.type === 'agent' || entry.type === 'user') return deleteStaffApi(entry.id, { permanent: true });
       return Promise.resolve();
     });
-    Promise.allSettled([leadPurge, ...binDeletes]).then((results) => {
-      const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length > 0) {
-        console.error('[RecycleBin] emptyAll: some items failed to purge', failed);
-        showNotification(`Failed to purge ${failed.length} item${failed.length > 1 ? 's' : ''} on the server.`);
-      }
-    });
+    const [leadResult, ...binResults] = await Promise.allSettled([leadPurge, ...binDeletes]);
+    const failedEntries = toPurgeBin.filter((_, index) => binResults[index]?.status === 'rejected');
+    setData((prev) => ({
+      ...prev,
+      deletedLeads: leadResult.status === 'rejected' ? (prev.deletedLeads || []) : [],
+      recycleBin: failedEntries,
+    }));
+    const failedCount = failedEntries.length + (leadResult.status === 'rejected' ? 1 : 0);
+    if (failedCount) {
+      console.error('[RecycleBin] emptyAll: some items failed to purge');
+      showNotification(`Failed to permanently delete ${failedCount} item${failedCount > 1 ? 's' : ''}.`);
+    } else {
+      showNotification('Recycle bin emptied.');
+    }
   };
   const totalCount = deletedLeads.length + recycleBin.length;
 
@@ -2753,111 +2786,122 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
 
   const softDeleteOffice = async (office) => {
     const ok = await saConfirm({
-      title: 'Delete office permanently?',
-      message: `Delete "${office.name}"? All staff in this office and their teams will be permanently deleted. Their leads will return to the unassigned pool.`,
-      confirmLabel: 'Delete permanently',
-      tone: 'danger',
+      title: 'Move office to the recycle bin?',
+      message: `Move "${office.name}" and its teams and staff to the recycle bin? Their leads will be unassigned and can be restored with the office.`,
+      confirmLabel: 'Move to bin',
+      tone: 'warning',
     });
     if (!ok) return;
-    // Collect all staff in this office so we can cascade UI removal.
-    const officeStaffIds = data.users
-      .filter(u => u.officeId === office.id)
-      .map(u => u.id);
-    const officeTeamIds = data.teams
-      .filter(t => t.officeId === office.id)
-      .map(t => t.id);
-    setData(prev => ({
-      ...prev,
-      offices: prev.offices.filter(o => o.id !== office.id),
-      teams:   prev.teams.filter(t => t.officeId !== office.id),
-      users:   prev.users.filter(u => u.officeId !== office.id),
-      leads:   prev.leads.map(l =>
-        officeStaffIds.includes(l.assignedToAgent) || officeTeamIds.includes(l.assignedToTeam) || l.assignedToOffice === office.id
-          ? {
-              ...l,
-              assignedToAgent: null,
-              assignedToTeam: null,
-              assignedToOffice: null,
-              assignedAgentName: null,
-              assignedTeamName: null,
-              assignedOfficeName: null,
-            }
-          : l
-      ),
-    }));
-    showNotification(`Office "${office.name}" and all its staff deleted.`);
-    deleteOffice(office.id).catch(err => {
+    try {
+      const result = await deleteOffice(office.id);
+      const staffIds = new Set(result.staff_ids || []);
+      const teamIds = new Set(result.team_ids || []);
+      const leadIds = new Set(result.lead_ids || []);
+      setData(prev => ({
+        ...prev,
+        offices: prev.offices.filter(item => item.id !== office.id),
+        teams: prev.teams.filter(item => !teamIds.has(item.id)),
+        users: prev.users.filter(item => !staffIds.has(item.id)),
+        leads: prev.leads.map(lead => leadIds.has(lead.id) ? {
+          ...lead,
+          assignedToAgent: null,
+          assignedToTeam: null,
+          assignedToTeamLeader: null,
+          assignedToOffice: null,
+          assignedAgentName: null,
+          assignedTeamName: null,
+          assignedOfficeName: null,
+        } : lead),
+        recycleBin: [...(prev.recycleBin || []).filter(item => item.id !== office.id), {
+          id: office.id,
+          type: 'office',
+          item: office,
+          deletedAt: result.deleted_at,
+        }],
+      }));
+      showNotification(`Office "${office.name}" moved to the recycle bin.`);
+    } catch (err) {
       console.error('[SuperAdminPanel] softDeleteOffice failed', err);
       showNotification(err.message || 'Could not delete office on the server.');
-    });
+    }
   };
 
   const softDeleteTeam = async (team) => {
     const ok = await saConfirm({
-      title: 'Delete team permanently?',
-      message: `Delete "${team.name}"? All staff in this team will be permanently deleted. Their leads will return to the unassigned pool.`,
-      confirmLabel: 'Delete permanently',
-      tone: 'danger',
+      title: 'Move team to the recycle bin?',
+      message: `Move "${team.name}" and its staff to the recycle bin? Their leads will be unassigned and can be restored with the team.`,
+      confirmLabel: 'Move to bin',
+      tone: 'warning',
     });
     if (!ok) return;
-    const teamStaffIds = data.users
-      .filter(u => u.teamId === team.id)
-      .map(u => u.id);
-    setData(prev => ({
-      ...prev,
-      teams: prev.teams.filter(t => t.id !== team.id),
-      users: prev.users.filter(u => u.teamId !== team.id),
-      leads: prev.leads.map(l =>
-        teamStaffIds.includes(l.assignedToAgent) || l.assignedToTeam === team.id
-          ? {
-              ...l,
-              assignedToAgent: null,
-              assignedToTeam: null,
-              assignedToOffice: null,
-              assignedAgentName: null,
-              assignedTeamName: null,
-              assignedOfficeName: null,
-            }
-          : l
-      ),
-    }));
-    showNotification(`Team "${team.name}" and all its staff deleted.`);
-    deleteTeam(team.id).catch(err => {
+    try {
+      const result = await deleteTeam(team.id);
+      const staffIds = new Set(result.staff_ids || []);
+      const leadIds = new Set(result.lead_ids || []);
+      setData(prev => ({
+        ...prev,
+        teams: prev.teams.filter(item => item.id !== team.id),
+        users: prev.users.filter(item => !staffIds.has(item.id)),
+        leads: prev.leads.map(lead => leadIds.has(lead.id) ? {
+          ...lead,
+          assignedToAgent: null,
+          assignedToTeam: null,
+          assignedToTeamLeader: null,
+          assignedToOffice: null,
+          assignedAgentName: null,
+          assignedTeamName: null,
+          assignedOfficeName: null,
+        } : lead),
+        recycleBin: [...(prev.recycleBin || []).filter(item => item.id !== team.id), {
+          id: team.id,
+          type: 'team',
+          item: team,
+          deletedAt: result.deleted_at,
+        }],
+      }));
+      showNotification(`Team "${team.name}" moved to the recycle bin.`);
+    } catch (err) {
       console.error('[SuperAdminPanel] softDeleteTeam failed', err);
       showNotification(err.message || 'Could not delete team on the server.');
-    });
+    }
   };
 
   const softDeleteAgent = async (agent) => {
     const ok = await saConfirm({
-      title: 'Delete staff member permanently?',
-      message: `Delete "${agent.name}"? Their account will be permanently removed. Any leads assigned to them will return to the unassigned pool.`,
-      confirmLabel: 'Delete permanently',
-      tone: 'danger',
+      title: 'Move staff member to the recycle bin?',
+      message: `Move "${agent.name}" to the recycle bin? Their leads will be unassigned and can be restored with this account.`,
+      confirmLabel: 'Move to bin',
+      tone: 'warning',
     });
     if (!ok) return;
-    setData(prev => ({
-      ...prev,
-      users: prev.users.filter(u => u.id !== agent.id),
-      leads: prev.leads.map(l =>
-        l.assignedToAgent === agent.id
-          ? {
-              ...l,
-              assignedToAgent: null,
-              assignedToTeam: null,
-              assignedToOffice: null,
-              assignedAgentName: null,
-              assignedTeamName: null,
-              assignedOfficeName: null,
-            }
-          : l
-      ),
-    }));
-    showNotification(`${agent.name} deleted. Their leads returned to the pool.`);
-    deleteStaffApi(agent.id).catch(err => {
+    try {
+      const result = await deleteStaffApi(agent.id);
+      const leadIds = new Set(result.lead_ids || []);
+      setData(prev => ({
+        ...prev,
+        users: prev.users.filter(user => user.id !== agent.id),
+        leads: prev.leads.map(lead => leadIds.has(lead.id) ? {
+          ...lead,
+          assignedToAgent: null,
+          assignedToTeam: null,
+          assignedToTeamLeader: null,
+          assignedToOffice: null,
+          assignedAgentName: null,
+          assignedTeamName: null,
+          assignedOfficeName: null,
+        } : lead),
+        recycleBin: [...(prev.recycleBin || []).filter(item => item.id !== agent.id), {
+          id: agent.id,
+          type: 'user',
+          item: agent,
+          deletedAt: result.deleted_at,
+        }],
+      }));
+      showNotification(`${agent.name} moved to the recycle bin.`);
+    } catch (err) {
       console.error('[SuperAdminPanel] softDeleteAgent failed', err);
       showNotification(err.message || 'Could not delete staff on the server.');
-    });
+    }
   };
 
   const copyToClipboard = async (link) => {
