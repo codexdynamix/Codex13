@@ -1,3 +1,0 @@
-.crm-admin-app { --crm-bg:#16171B; --crm-card:#23242A; --crm-card-hover:#2D2F36; --crm-border:rgba(255,255,255,.08); --crm-border-hover:rgba(255,255,255,.16); --crm-text-primary:#FFFFFF; --crm-text-secondary:#8E8E93; --crm-text-muted:#636366; --crm-input-bg:rgba(255,255,255,.06); --crm-accent:#0A84FF; --crm-accent-hover:#0071E3; --crm-radius:14px; --crm-radius-sm:8px; --crm-accent-fg:#FFFFFF; min-height:100vh; box-sizing:border-box; background:#16171B; color:#FFFFFF; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Helvetica Neue',sans-serif; }
-.crm-admin-app * { box-sizing:border-box; }
-.crm-admin-app .crm-settings-page { width:100%; }

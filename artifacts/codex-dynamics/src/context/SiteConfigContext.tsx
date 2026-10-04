@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
 import { DEFAULT_SITE_CONFIG, type SiteConfig, type SocialContact, type AddressItem } from "@/types/site-editor";
 
