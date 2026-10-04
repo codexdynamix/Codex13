@@ -8,7 +8,7 @@ export async function enterClientPortal(clientId) {
   }
 
   setPortalImpersonationSession(response.client, response.token);
-  const targetUrl = `/portal/dashboard?impersonateClientId=${encodeURIComponent(clientId)}`;
+  const targetUrl = '/portal/dashboard';
   if (typeof window.cdxNavigate === 'function') {
     window.cdxNavigate(targetUrl);
   } else {

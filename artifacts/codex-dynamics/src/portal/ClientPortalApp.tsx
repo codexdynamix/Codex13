@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { readPortalSession, setPortalSession } from '../services/portalAuth';
+import { readPortalSession } from '../services/portalAuth';
 import { portalDb } from '../services/portalDatabase';
 import { PortalShell } from './PortalShell';
 import { PortalLogin } from './pages/PortalLogin';
@@ -36,32 +36,9 @@ export function ClientPortalApp() {
       const impersonateId = urlParams.get('impersonateClientId') || urlParams.get('impersonateLeadId');
 
       if (impersonateId) {
-        let clientData: any = null;
-        try {
-          const raw = sessionStorage.getItem('codex_impersonate_lead');
-          if (raw) clientData = JSON.parse(raw);
-        } catch (_) {}
-        const id = impersonateId;
-        const name = clientData?.name || clientData?.company || 'Client';
-        const email = clientData?.email || '';
-        const portalClient = {
-          id,
-          name,
-          company: clientData?.company || name,
-          email,
-          phone: clientData?.phone || '',
-          address: clientData?.address || '',
-          country: clientData?.country || 'United Kingdom',
-          countryCode: clientData?.countryCode || 'GB',
-          status: 'Active' as const,
-          portalEnabled: true,
-          tier: (clientData?.tier || 'Enterprise Partner') as any,
-          lastLoginAt: new Date().toISOString(),
-          createdAt: clientData?.createdAt || new Date().toISOString(),
-        };
-        sessionStorage.setItem('codex_impersonating_admin', 'true');
-        sessionStorage.setItem('codex_impersonating_client_name', name);
-        setPortalSession(portalClient);
+        // Older links may still contain the requested client ID. The server-
+        // authorized staff session must already be established before this
+        // component loads; a URL parameter must never create or replace it.
         window.history.replaceState({}, '', '/portal/dashboard');
         setCurrentPath('/portal/dashboard');
       } else {
