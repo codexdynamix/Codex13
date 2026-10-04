@@ -309,7 +309,7 @@ function hostingerMailNormalizeAttachments(mixed $value): array {
 
     $totalBytes = 0;
     $attachments = [];
-    $blockedExtensions = ['php', 'phtml', 'phar', 'exe', 'dll', 'bat', 'cmd', 'com', 'msi', 'sh', 'ps1', 'js', 'mjs', 'html', 'htm', 'svg', 'jar'];
+    $blockedExtensions = ['php', 'phtml', 'phar', 'exe', 'dll', 'bat', 'cmd', 'com', 'msi', 'sh', 'ps1', 'js', 'cjs', 'mjs', 'vbs', 'vbe', 'jse', 'wsf', 'wsh', 'hta', 'scr', 'jar', 'html', 'htm', 'mhtml', 'xhtml', 'svg', 'lnk', 'url', 'reg'];
     foreach ($value as $attachment) {
         if (!is_array($attachment)) jsonResponse(['ok' => false, 'error' => 'Attachments could not be validated.'], 422);
         $filename = trim((string)($attachment['filename'] ?? ''));
@@ -381,14 +381,16 @@ function hostingerMailNormalizeCompose(array $input, bool $forSending): array {
         if (trim($text) === '' && trim(strip_tags($html)) === '') jsonResponse(['ok' => false, 'error' => 'Write a message before sending.'], 422);
     }
 
+    // Draft records need a stable, complete shape even when fields are blank.
+    // Provider send requests, by contrast, omit empty optional fields.
     $payload = [];
-    if ($to) $payload['to'] = $to;
-    if ($cc) $payload['cc'] = $cc;
-    if ($bcc) $payload['bcc'] = $bcc;
-    if ($subject !== '') $payload['subject'] = $subject;
-    if ($text !== '') $payload['text'] = $text;
+    if (!$forSending || $to) $payload['to'] = $to;
+    if (!$forSending || $cc) $payload['cc'] = $cc;
+    if (!$forSending || $bcc) $payload['bcc'] = $bcc;
+    $payload['subject'] = $subject;
+    $payload['text'] = $text;
     if ($html !== '') $payload['html'] = $html;
-    if ($attachments) $payload['attachments'] = $attachments;
+    if (!$forSending || $attachments) $payload['attachments'] = $attachments;
     if ($inReplyTo) $payload['inReplyTo'] = $inReplyTo;
     if ($forwardOf) $payload['forwardOf'] = $forwardOf;
     return $payload;
@@ -793,7 +795,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
         jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     }
 
-    if ($apiPath === '/portal/mailboxes' && $method === 'GET') {
+        if ($apiPath === '/portal/mailboxes' && $method === 'GET') {
         header('Cache-Control: no-store, private');
         header('Pragma: no-cache');
         $integration = hostingerMailIntegration($pdo);
@@ -801,7 +803,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
             jsonResponse(['ok' => false, 'error' => 'Email service is not configured yet. Please contact your administrator.'], 409);
         }
         $stmt = $pdo->prepare(
-            "SELECT provider_mailbox_id, email_address, display_name
+            "SELECT id, client_id, provider_mailbox_id, email_address, display_name, created_at, updated_at
              FROM client_mailboxes WHERE client_id = ? AND provider = 'hostinger' AND status = 'enabled'
              ORDER BY email_address"
         );
@@ -809,9 +811,14 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
         $mailboxes = [];
         foreach ($stmt->fetchAll() as $row) {
             $mailboxes[] = [
-                'resourceId' => (string)$row['provider_mailbox_id'],
+                'id' => (string)$row['id'],
+                'clientId' => (string)$row['client_id'],
+                'providerMailboxId' => (string)$row['provider_mailbox_id'],
                 'emailAddress' => (string)$row['email_address'],
                 'displayName' => (string)$row['display_name'],
+                'enabled' => true,
+                'createdAt' => (string)$row['created_at'],
+                'updatedAt' => (string)$row['updated_at'],
             ];
         }
         jsonResponse(['ok' => true, 'mailboxes' => $mailboxes]);
@@ -1047,6 +1054,9 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
         }
 
         if ($method === 'DELETE') {
+            if (($input['confirmed'] ?? false) !== true) {
+                jsonResponse(['ok' => false, 'error' => 'Confirm permanent deletion before continuing.'], 422);
+            }
             hostingerMailStoredRequest($pdo, 'DELETE', $basePath);
             jsonResponse(['ok' => true, 'message' => 'Email permanently deleted.']);
         }

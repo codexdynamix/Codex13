@@ -3,3 +3,4 @@
 - [Client credential encryption](client-credential-encryption.md) — the app’s saved website and mailbox passwords depend on a stable `SESSION_SECRET`; rotation requires re-entering them.
 - [Accounting search layout conflicts](accounting-search-layout-conflicts.md) — generic form label/input rules can stack compact search fields unless excluded at the source.
 - [Flexible CRM ownership](flexible-crm-ownership.md) — office/team are optional, and standalone team leaders see clients only when explicitly assigned.
+- [Hostinger Mail API limits](hostinger-mail-api-limits.md) — provider message lists omit snippets and the API has no drafts endpoint; keep drafts mailbox-scoped in Codex.

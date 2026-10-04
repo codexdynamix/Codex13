@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "php -S 0.0.0.0:${PORT:-8080} ../codex-dynamics/public/api/index.php",
+    "dev": "php -d post_max_size=32M -d upload_max_filesize=12M -S 0.0.0.0:${PORT:-8080} ../codex-dynamics/public/api/index.php",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"

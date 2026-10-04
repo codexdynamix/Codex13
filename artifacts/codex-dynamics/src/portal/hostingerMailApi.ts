@@ -27,6 +27,13 @@ async function portalRequest<T>(path: string, options: RequestInit = {}, binary 
 const base = (resourceId: string) => `/api/portal/mailboxes/${encodeURIComponent(resourceId)}`;
 const messageUrl = (resourceId: string, folder: string, uid: number) => `${base(resourceId)}/folders/${encodeURIComponent(folder)}/messages/${uid}`;
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+const normalizeDraft = (draft: Draft): Draft => ({
+  ...draft,
+  to: Array.isArray(draft.to) ? draft.to : [],
+  cc: Array.isArray(draft.cc) ? draft.cc : [],
+  bcc: Array.isArray(draft.bcc) ? draft.bcc : [],
+  attachments: Array.isArray(draft.attachments) ? draft.attachments : [],
+});
 
 export async function getPortalMailboxes() { const d = await portalRequest<{ mailboxes?: ClientMailbox[]; assignments?: ClientMailbox[] } | ClientMailbox[]>('/api/portal/mailboxes'); return Array.isArray(d) ? d : d.mailboxes || d.assignments || []; }
 export async function getPortalMailFolders(resourceId: string) { const d = await portalRequest<{ folders?: Folder[] } | Folder[]>(`${base(resourceId)}/folders`); return Array.isArray(d) ? d : d.folders || []; }
@@ -36,9 +43,15 @@ export async function getPortalStarredMessages(resourceId: string, page: number,
 export async function getPortalMailMessage(resourceId: string, folder: string, uid: number) { return portalRequest<{ message: MailMessage; body: { text: string; html: string } }>(messageUrl(resourceId, folder, uid)); }
 export async function setPortalMessageFlags(resourceId: string, folder: string, uid: number, addFlags: string[], removeFlags: string[]) { return portalRequest(messageUrl(resourceId, folder, uid), { ...json('PATCH', { addFlags, removeFlags }) }); }
 export async function movePortalMessage(resourceId: string, folder: string, uid: number, targetFolder: string) { return portalRequest(`${messageUrl(resourceId, folder, uid)}/move`, { ...json('POST', { targetFolder }) }); }
-export async function deletePortalMailMessage(resourceId: string, folder: string, uid: number) { return portalRequest(messageUrl(resourceId, folder, uid), json('DELETE')); }
+export async function deletePortalMailMessage(resourceId: string, folder: string, uid: number) { return portalRequest(messageUrl(resourceId, folder, uid), json('DELETE', { confirmed: true })); }
 export async function sendPortalMail(resourceId: string, payload: object) { return portalRequest(`${base(resourceId)}/send`, { ...json('POST', payload) }); }
-export async function listPortalMailDrafts(resourceId: string) { const d = await portalRequest<{ drafts?: Draft[] } | Draft[]>(`${base(resourceId)}/drafts`); return Array.isArray(d) ? d : d.drafts || []; }
-export async function savePortalMailDraft(resourceId: string, draft: Draft) { const result = await portalRequest<{ draft?: Draft } | Draft>(`${base(resourceId)}/drafts`, { ...json('POST', draft) }); return ('draft' in result ? result.draft : result) as Draft; }
+export async function listPortalMailDrafts(resourceId: string) {
+  const d = await portalRequest<{ drafts?: Draft[] } | Draft[]>(`${base(resourceId)}/drafts`);
+  return (Array.isArray(d) ? d : d.drafts || []).map(normalizeDraft);
+}
+export async function savePortalMailDraft(resourceId: string, draft: Draft) {
+  const result = await portalRequest<{ draft?: Draft } | Draft>(`${base(resourceId)}/drafts`, { ...json('POST', draft) });
+  return normalizeDraft(('draft' in result ? result.draft : result) as Draft);
+}
 export async function deletePortalMailDraft(resourceId: string, draftId: string) { return portalRequest(`${base(resourceId)}/drafts/${encodeURIComponent(draftId)}`, json('DELETE')); }
 export async function downloadPortalMailAttachment(resourceId: string, folder: string, uid: number, attachmentId: string) { return portalRequest<Blob>(`${messageUrl(resourceId, folder, uid)}/attachments/${encodeURIComponent(attachmentId)}`, {}, true); }
