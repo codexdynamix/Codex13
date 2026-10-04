@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { enterClientPortal } from '../clientImpersonation.js';
 import { useNavigate } from 'react-router-dom';
 import {
   ROLE, LEAD_STATUSES, normalizeStage, NotificationContext, DataContext,
@@ -133,56 +134,12 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
 
   // Enter client's own account (admin direct access - no password required)
   const enterLeadAccount = async (lead) => {
+    if (!lead?.id) return showNotification('Invalid client.');
     try {
-      if (!lead || !lead.id) {
-        showNotification('Invalid client.');
-        return;
-      }
-      try {
-        const notifications = await getLeadNotificationsAsAdmin(lead.id);
-        sessionStorage.setItem('codex_impersonate_notifications', JSON.stringify(notifications));
-      } catch (_) { /* non-fatal */ }
-
-      const clientId = lead.id;
-      const clientName = lead.name || `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Client';
-      const clientEmail = (lead.email || '').toLowerCase().trim();
-      const token = `cdx_sess_${clientId}_${Date.now()}`;
-      const portalClient = {
-        id: clientId,
-        name: clientName,
-        company: lead.company || clientName,
-        email: clientEmail,
-        phone: lead.phone || '',
-        address: lead.address || '',
-        country: lead.country || 'United Kingdom',
-        countryCode: lead.countryCode || 'GB',
-        status: lead.status || 'Active',
-        portalEnabled: true,
-        tier: lead.tier || 'Enterprise Partner',
-        lastLoginAt: new Date().toISOString(),
-        createdAt: lead.createdAt || new Date().toISOString(),
-      };
-
-      // Set directly into localStorage so portalAuth.readPortalSession() restores immediately
-      localStorage.setItem('cdx_portal_session_token_v2', token);
-      localStorage.setItem('cdx_portal_session_client_v2', JSON.stringify(portalClient));
-      localStorage.setItem('codex_client_token', token);
-      localStorage.setItem('codex_client_user', JSON.stringify(portalClient));
-      sessionStorage.removeItem('cdx_portal_logged_out');
-      sessionStorage.setItem('codex_impersonating_admin', 'true');
-      sessionStorage.setItem('codex_impersonating_client_name', clientName);
-      sessionStorage.setItem('codex_impersonate_lead', JSON.stringify(lead));
-
-      const targetUrl = `/portal/dashboard?impersonateClientId=${encodeURIComponent(clientId)}`;
-      if (typeof window !== 'undefined' && typeof window.cdxNavigate === 'function') {
-        window.cdxNavigate(targetUrl);
-      } else {
-        window.history.pushState(null, '', targetUrl);
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }
+      await enterClientPortal(lead.id);
     } catch (err) {
       console.error('Failed to enter client account:', err);
-      showNotification('Could not enter client account.');
+      showNotification(err?.message || 'Could not enter client account.');
     }
   };
 

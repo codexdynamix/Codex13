@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { getLeadProfilePath } from '../leadProfileRouting.js';
 import { ROLE, getCountryFlag, LEAD_STATUSES } from '../shared.jsx';
 import { portalDb } from '../../../services/portalDatabase';
-import { setPortalSession } from '../../../services/portalAuth';
+import { enterClientPortal } from '../clientImpersonation.js';
 import {
-  getLeadNotificationsAsAdmin,
   getUserProfileHistoryApi,
   adminSetClientPassword,
   updateLeadApi,
@@ -16,6 +15,7 @@ import {
   deleteLeadApi,
   getAdminMessages,
   sendAdminMessage,
+  markAdminMessagesRead,
 } from '../adminApi.js';
 import { useConfirmDialog } from './ConfirmModal/ConfirmModal.jsx';
 
@@ -94,15 +94,18 @@ export default function LeadProfileModal({
     const currentPwd = portalDb.getClientPassword(lead.id) || lead.clientPassword || lead.client_password || '';
     setLiveClientPassword(currentPwd);
     setClientActivityData(portalDb.getClientActivity(lead.id));
-    setChatMessages(portalDb.getDirectChatMessages(lead.id));
+    setChatMessages([]);
 
-    getAdminMessages(lead.id)
-      .then((res) => {
-        if (res?.messages && res.messages.length > 0) {
-          setChatMessages(res.messages);
+    getAdminMessages(lead.id, { limit: 200 })
+      .then(async (res) => {
+        setChatMessages(res?.messages || []);
+        if (res?.messages?.some((message) => message.sender === 'client' && !message.readAt)) {
+          await markAdminMessagesRead(lead.id);
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        showNotification(error?.message || 'Could not load client messages.');
+      });
 
     setProfileHistory([]);
     setProfileHistoryError('');
@@ -176,27 +179,9 @@ export default function LeadProfileModal({
     }
   };
 
-  const handleLaunchClientPortal = () => {
+  const handleLaunchClientPortal = async () => {
     try {
-      let client = portalDb.getClientById(lead.id) || portalDb.getClientByEmail(lead.email);
-      if (!client) {
-        client = portalDb.adminCreateClient({
-          id: lead.id,
-          name: lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Client',
-          company: lead.company || lead.name || 'Client Org',
-          email: lead.email || '',
-          phone: lead.phone || '',
-          address: lead.address || '',
-          country: lead.country || 'United Kingdom',
-          countryCode: lead.country_code || 'GB',
-          status: 'Active',
-          portalEnabled: true,
-          tier: 'Enterprise Partner',
-        });
-      }
-      setPortalSession(client);
-      window.open('/portal/dashboard', '_blank');
-      showNotification(`Launched client portal session for ${client.name}`);
+      await enterClientPortal(lead.id);
     } catch (error) {
       showNotification(error?.message || 'Could not launch the client portal.');
     }
@@ -222,13 +207,12 @@ export default function LeadProfileModal({
     if (!text || !lead?.id) return;
     setChatSending(true);
     try {
-      const senderName = currentUser?.name || 'Support Specialist';
-      const newMsg = portalDb.sendDirectChatMessage(lead.id, text, 'staff', senderName);
+      const newMsg = await sendAdminMessage(lead.id, text);
       setChatMessages((prev) => [...prev, newMsg]);
       setChatInputText('');
-      await sendAdminMessage(lead.id, text).catch(() => {});
-      setClientActivityData(portalDb.getClientActivity(lead.id));
       showNotification('Message sent to client portal.');
+    } catch (error) {
+      showNotification(error?.message || 'Could not send the client message.');
     } finally {
       setChatSending(false);
     }
@@ -247,58 +231,15 @@ export default function LeadProfileModal({
   );
 
   const enterLeadAccount = async () => {
+    if (!lead?.id) {
+      showNotification('Invalid client.');
+      return;
+    }
     try {
-      if (!lead || !lead.id) {
-        showNotification('Invalid client.');
-        return;
-      }
-      try {
-        const notifications = await getLeadNotificationsAsAdmin(lead.id);
-        sessionStorage.setItem('codex_impersonate_notifications', JSON.stringify(notifications));
-      } catch (_) {
-        /* non-fatal */
-      }
-
-      const clientId = lead.id;
-      const clientName = lead.name || `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Client';
-      const clientEmail = (lead.email || '').toLowerCase().trim();
-      const token = `cdx_sess_${clientId}_${Date.now()}`;
-      const portalClient = {
-        id: clientId,
-        name: clientName,
-        company: lead.company || clientName,
-        email: clientEmail,
-        phone: lead.phone || '',
-        address: lead.address || '',
-        country: lead.country || 'United Kingdom',
-        countryCode: lead.countryCode || 'GB',
-        status: lead.status || 'Active',
-        portalEnabled: true,
-        tier: lead.tier || 'Enterprise Partner',
-        lastLoginAt: new Date().toISOString(),
-        createdAt: lead.createdAt || new Date().toISOString(),
-      };
-
-      // Set directly into localStorage so portalAuth.readPortalSession() restores immediately
-      localStorage.setItem('cdx_portal_session_token_v2', token);
-      localStorage.setItem('cdx_portal_session_client_v2', JSON.stringify(portalClient));
-      localStorage.setItem('codex_client_token', token);
-      localStorage.setItem('codex_client_user', JSON.stringify(portalClient));
-      sessionStorage.removeItem('cdx_portal_logged_out');
-      sessionStorage.setItem('codex_impersonating_admin', 'true');
-      sessionStorage.setItem('codex_impersonating_client_name', clientName);
-      sessionStorage.setItem('codex_impersonate_lead', JSON.stringify(lead));
-
-      const targetUrl = `/portal/dashboard?impersonateClientId=${encodeURIComponent(clientId)}`;
-      if (typeof window !== 'undefined' && typeof window.cdxNavigate === 'function') {
-        window.cdxNavigate(targetUrl);
-      } else {
-        window.history.pushState(null, '', targetUrl);
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }
+      await enterClientPortal(lead.id);
     } catch (err) {
       console.error('Failed to enter client account:', err);
-      showNotification('Could not enter client account.');
+      showNotification(err?.message || 'Could not enter client account.');
     }
   };
 

@@ -206,6 +206,8 @@ function initSchema(PDO $pdo): void {
             created_at TEXT
         );
     ");
+    ensureDatabaseColumn($pdo, 'messages', 'attachment_mime', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'messages', 'attachment_kind', 'TEXT NULL');
 
     // 5. Audit Log (Activity) Table
     $pdo->exec("
@@ -630,13 +632,16 @@ function initSchema(PDO $pdo): void {
             token_hash TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NULL
         );
         CREATE TABLE IF NOT EXISTS portal_sessions (
             token_hash TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
             expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            is_impersonating INTEGER NOT NULL DEFAULT 0,
+            admin_user_id TEXT NULL
         );
         CREATE TABLE IF NOT EXISTS user_notification_reads (
             user_id TEXT NOT NULL,
@@ -644,7 +649,27 @@ function initSchema(PDO $pdo): void {
             read_at TEXT NOT NULL,
             PRIMARY KEY (user_id, notification_id)
         );
+        CREATE TABLE IF NOT EXISTS admin_notifications (
+            id VARCHAR(128) PRIMARY KEY,
+            staff_user_id VARCHAR(128) NOT NULL,
+            kind VARCHAR(64) NOT NULL DEFAULT 'info',
+            title VARCHAR(255) NOT NULL,
+            body TEXT,
+            read_at TEXT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS crm_message_presence (
+            client_id VARCHAR(128) NOT NULL,
+            actor_type VARCHAR(16) NOT NULL,
+            actor_id VARCHAR(128) NOT NULL,
+            is_typing INTEGER NOT NULL DEFAULT 0,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (client_id, actor_type, actor_id)
+        );
     ");
+    ensureDatabaseColumn($pdo, 'admin_sessions', 'last_seen_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'portal_sessions', 'is_impersonating', 'INTEGER NOT NULL DEFAULT 0');
+    ensureDatabaseColumn($pdo, 'portal_sessions', 'admin_user_id', 'TEXT NULL');
 }
 
 function seedInitialData(PDO $pdo): void {

@@ -30,44 +30,17 @@ export function readPortalSession(): PortalSession | null {
       } catch (_) {}
     }
 
-    // If admin is impersonating but user payload isn't in localStorage, check sessionStorage
-    if (!client && isImpersonating) {
-      try {
-        const leadRaw = sessionStorage.getItem('codex_impersonate_lead');
-        if (leadRaw) {
-          const lead = JSON.parse(leadRaw);
-          const name = lead.name || `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Client';
-          client = {
-            id: lead.id,
-            name,
-            company: lead.company || name,
-            email: lead.email || '',
-            phone: lead.phone || '',
-            address: lead.address || '',
-            country: lead.country || 'United Kingdom',
-            countryCode: lead.countryCode || 'GB',
-            status: 'Active',
-            portalEnabled: true,
-            tier: (lead.tier || 'Enterprise Partner') as any,
-            lastLoginAt: new Date().toISOString(),
-            createdAt: lead.createdAt || new Date().toISOString(),
-          };
-          localStorage.setItem(PORTAL_TOKEN_KEY, `cdx_sess_${client.id}_${Date.now()}`);
-          localStorage.setItem(PORTAL_USER_KEY, JSON.stringify(client));
-        }
-      } catch (_) {}
-    }
-
-    if (!client) {
+    if (!client || !token || token.startsWith('cdx_sess_')) {
+      if (isImpersonating) clearPortalSession();
       return null;
     }
 
-    // If accessing via admin authority, bypass password and disabled check
+    // The server-issued portal token carries the impersonation scope. The
+    // browser flag only selects the appropriate portal UI; it grants no API
+    // access by itself.
     if (isImpersonating) {
-      const adminToken = localStorage.getItem('codex_admin_token');
-      if (!adminToken) return null;
       return {
-        token: adminToken,
+        token,
         client,
         loginTime: Date.now(),
       };
@@ -102,10 +75,9 @@ export function setPortalSession(client: PortalClient, serverToken?: string): Po
   portalDb.upsertClient(client);
 
   const impersonating = sessionStorage.getItem('codex_impersonating_admin') === 'true';
-  const token = serverToken
-    || (impersonating ? localStorage.getItem('codex_admin_token') : localStorage.getItem(PORTAL_TOKEN_KEY))
-    || '';
-  if (!token) throw new Error('A valid server session is required.');
+  if (impersonating) throw new Error('Use the server-authorized portal session flow for staff access.');
+  const token = serverToken || localStorage.getItem(PORTAL_TOKEN_KEY) || '';
+  if (!token || token.startsWith('cdx_sess_')) throw new Error('A valid server session is required.');
   const session: PortalSession = {
     token,
     client,
@@ -142,12 +114,53 @@ export function setPortalSession(client: PortalClient, serverToken?: string): Po
   return session;
 }
 
+export function setPortalImpersonationSession(client: PortalClient, serverToken: string): PortalSession {
+  if (!serverToken || serverToken.startsWith('cdx_sess_')) {
+    throw new Error('The server did not return a valid client portal session.');
+  }
+  clearPortalSession();
+  const session: PortalSession = {
+    token: serverToken,
+    client,
+    loginTime: Date.now(),
+  };
+  try {
+    sessionStorage.removeItem('cdx_portal_logged_out');
+    sessionStorage.setItem('codex_impersonating_admin', 'true');
+    sessionStorage.setItem('codex_impersonating_client_name', client.name || 'Client');
+    localStorage.setItem(PORTAL_TOKEN_KEY, serverToken);
+    localStorage.setItem(PORTAL_USER_KEY, JSON.stringify(client));
+    localStorage.setItem('codex_client_token', serverToken);
+    localStorage.setItem('codex_client_user', JSON.stringify({
+      id: client.id,
+      name: client.name,
+      email: client.email,
+      phone: client.phone,
+      country: client.country,
+      status: client.status,
+    }));
+    window.dispatchEvent(new CustomEvent('cdx_portal_auth_changed', { detail: session }));
+  } catch (error) {
+    clearPortalSession();
+    throw error;
+  }
+  return session;
+}
+
 export function clearPortalSession(): void {
   try {
     sessionStorage.setItem('cdx_portal_logged_out', 'true');
+    const impersonating = sessionStorage.getItem('codex_impersonating_admin') === 'true';
     const token = localStorage.getItem(PORTAL_TOKEN_KEY);
     const raw = localStorage.getItem(PORTAL_USER_KEY);
-    if (token && raw) {
+    if (token) {
+      void fetch('/api/portal/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
+      }).catch(() => {});
+    }
+    if (token && raw && !impersonating) {
       try {
         const client = JSON.parse(raw) as PortalClient;
         portalDb.logAudit(client.id, client.name, 'CLIENT_LOGOUT', 'Client signed out of Client Portal');
@@ -157,6 +170,10 @@ export function clearPortalSession(): void {
     localStorage.removeItem(PORTAL_USER_KEY);
     localStorage.removeItem('codex_client_token');
     localStorage.removeItem('codex_client_user');
+    sessionStorage.removeItem('codex_impersonating_admin');
+    sessionStorage.removeItem('codex_impersonating_client_name');
+    sessionStorage.removeItem('codex_impersonate_lead');
+    sessionStorage.removeItem('codex_impersonate_notifications');
     window.dispatchEvent(new CustomEvent('cdx_portal_auth_changed', { detail: null }));
   } catch (_) {}
 }

@@ -164,7 +164,9 @@ export async function fetchAdminMe() {
 export const DEFAULT_CAPABILITY_CATALOG = {
   lead_upload: 'Lead Upload',
   create_agent: 'Create Agent',
+  registrations: 'Registrations',
   notifications: 'Notifications',
+  security: 'Security',
   content: 'Content',
   enquiries: 'Enquiries',
   chat: 'Chat',
@@ -695,114 +697,50 @@ export async function getAdminMessages(userId, { before, limit = 100 } = {}) {
   const empty = { user: null, messages: [], unreadCount: 0, hasMore: false };
   if (!userId) return empty;
 
-  // Local portalDb direct chat messages
-  const localDirect = (portalDb.getDirectChatMessages(userId) || []).map((m) => ({
-    id: m.id,
-    sender: m.sender === 'staff' ? 'agent' : 'client',
-    text: m.text,
-    body: m.text,
-    timestamp: m.createdAt,
-    createdAt: m.createdAt,
-    readAt: null,
-    agentId: null,
-    attachment: null,
-  }));
-
   const qs = new URLSearchParams({ user_id: userId, limit: String(limit) });
   if (before) qs.set('before', before);
-  try {
-    const data = await adminFetch(`/api/admin/messages?${qs.toString()}`);
-    const remote = Array.isArray(data?.messages) ? data.messages.map(mapAdminMessage) : [];
-    const seen = new Set();
-    const merged = [];
-    for (const m of [...localDirect, ...remote]) {
-      if (!seen.has(m.id)) {
-        seen.add(m.id);
-        merged.push(m);
-      }
-    }
-    merged.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
-    return {
-      user: data?.user || { id: userId },
-      messages: merged,
-      unreadCount: Number(data?.unread_count || 0),
-      hasMore: Boolean(data?.has_more),
-    };
-  } catch (err) {
-    if (localDirect.length > 0) {
-      return { user: { id: userId }, messages: localDirect, unreadCount: 0, hasMore: false };
-    }
-    if (err.status === 401 || err.status === 403 || err.status === 404) return empty;
-    throw err;
-  }
+  const data = await adminFetch(`/api/admin/messages?${qs.toString()}`);
+  return {
+    user: data?.user || { id: userId },
+    messages: Array.isArray(data?.messages) ? data.messages.map(mapAdminMessage) : [],
+    unreadCount: Number(data?.unread_count || 0),
+    hasMore: Boolean(data?.has_more),
+  };
 }
 
 export async function sendAdminMessage(userId, text) {
   if (!userId) throw new Error('user_id required');
-  const storedProfile = getStoredAdminProfile();
-  const staffName = storedProfile?.name || 'Support Agent';
-
-  // Save to portalDb immediately
-  const localMsg = portalDb.sendDirectChatMessage(userId, String(text || '').trim(), 'staff', staffName);
-
-  try {
-    const data = await adminFetch('/api/admin/messages', {
-      method: 'POST',
-      body: { user_id: userId, body: String(text || '').trim() },
-    });
-    if (data?.message) return mapAdminMessage(data.message);
-  } catch (_) {}
-
-  return {
-    id: localMsg.id,
-    sender: 'agent',
-    text: localMsg.text,
-    body: localMsg.text,
-    timestamp: localMsg.createdAt,
-    createdAt: localMsg.createdAt,
-    readAt: null,
-    agentId: storedProfile?.id || null,
-    attachment: null,
-  };
+  const body = String(text || '').trim();
+  if (!body) throw new Error('Write a message before sending.');
+  const data = await adminFetch('/api/admin/messages', {
+    method: 'POST',
+    body: { user_id: userId, body },
+  });
+  if (!data?.message) throw new Error('The message was not saved.');
+  return mapAdminMessage(data.message);
 }
 
 export async function markAdminMessagesRead(userId) {
   if (!userId) return { ok: false, marked: 0 };
-  try {
-    return await adminFetch('/api/admin/messages/read', {
-      method: 'POST',
-      body:   { user_id: userId },
-    });
-  } catch (_) {
-    return { ok: false, marked: 0 };
-  }
+  return adminFetch('/api/admin/messages/read', {
+    method: 'POST',
+    body:   { user_id: userId },
+  });
 }
 
 export async function getAdminUnreadMessageCounts() {
-  try {
-    const data = await adminFetch('/api/admin/messages/unread_counts');
-    const counts = data?.counts && typeof data.counts === 'object' ? data.counts : {};
-    return { counts, total: Number(data?.total || 0) };
-  } catch (_) {
-    return { counts: {}, total: 0 };
-  }
+  const data = await adminFetch('/api/admin/messages/unread_counts');
+  const counts = data?.counts && typeof data.counts === 'object' ? data.counts : {};
+  return { counts, total: Number(data?.total || 0) };
 }
 
 export async function getAdminNotificationsUnread() {
-  try {
-    const data = await adminFetch('/api/admin/notifications?limit=1&only_unread=1');
-    return { unreadCount: Number(data?.unread_count || 0) };
-  } catch (_) {
-    return { unreadCount: 0 };
-  }
+  const data = await adminFetch('/api/admin/notifications?limit=1&only_unread=1');
+  return { unreadCount: Number(data?.unread_count || 0) };
 }
 
 export async function markAllAdminNotificationsRead() {
-  try {
-    return await adminFetch('/api/admin/notifications/read-all', { method: 'POST', body: {} });
-  } catch (_) {
-    return { ok: false };
-  }
+  return adminFetch('/api/admin/notifications/read-all', { method: 'POST', body: {} });
 }
 
 export async function listAdminNotificationsPage({ limit = 50, onlyUnread = false } = {}) {
@@ -1042,15 +980,13 @@ function mapStaffRow(s) {
     teamId:      s.team_id ?? null,
     teamName:    s.team_name ?? null,
     status:      s.status,
+    capabilities: s.capabilities && typeof s.capabilities === 'object' ? s.capabilities : {},
     lastLoginAt: s.last_login_at ?? null,
     createdAt:   s.created_at ?? null,
     leadCount:   s.lead_count ?? 0,
     deletedAt:   s.deleted_at ?? null,
     deletedScopeType: s.deleted_scope_type ?? null,
-    // Frontend convenience: panels render `isLoggedIn` as a coloured dot.
-    // Real admins are "logged in" only inside their own browser session, so
-    // this is always false from a remote-list perspective.
-    isLoggedIn:  false,
+    isLoggedIn:  Boolean(s.is_online),
   };
 }
 
@@ -1597,6 +1533,14 @@ export async function adminSetClientPassword(userId, newPassword) {
   return result;
 }
 
+export async function startClientPortalImpersonation(clientId) {
+  if (!clientId) throw new Error('client_id is required.');
+  return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/impersonate`, {
+    method: 'POST',
+    body: {},
+  });
+}
+
 export async function getUserProfileHistoryApi(userId, { limit = 50, offset = 0 } = {}) {
   if (!userId) {
     const err = new Error('userId is required'); err.code = 'bad_request'; throw err;
@@ -1884,7 +1828,11 @@ export async function untrackSession(_token, _trackId) {
 }
 
 export async function sendHeartbeat(_token, _page) {
-  return { ok: true };
+  if (!getAdminToken()) return { ok: false };
+  return adminFetch('/api/admin/presence', {
+    method: 'POST',
+    body: { page: _page || (typeof window !== 'undefined' ? window.location.pathname : '') },
+  });
 }
 
 export async function getSessionDetail(_token, id) {

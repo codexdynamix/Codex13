@@ -26,10 +26,12 @@ import {
   listOffices,
   listTeams,
   fetchAllLeads,
+  fetchLeadById,
   listStaff,
   updateLeadApi,
   assignLeadApi,
   createLeadApi,
+  sendHeartbeat,
 } from './adminApi';
 
 import {
@@ -620,6 +622,15 @@ function App() {
       }
     }, 15000);
 
+    const refreshStaffPresence = () => {
+      if (!getAdminToken()) return;
+      sendHeartbeat(undefined, window.location.pathname).catch((error) => {
+        console.warn('[App] staff presence heartbeat failed', error);
+      });
+    };
+    refreshStaffPresence();
+    const staffHeartbeatId = setInterval(refreshStaffPresence, 30000);
+
     const handleInquirySync = () => {
       loadBackendAdminData();
     };
@@ -632,6 +643,7 @@ function App() {
     };
     return () => {
       clearInterval(leadRefreshId);
+      clearInterval(staffHeartbeatId);
       window.removeEventListener('storage', handleInquirySync);
       window.removeEventListener('codex_inquiry_added', handleInquirySync);
     };
@@ -738,9 +750,19 @@ function App() {
         ...prev,
         leads: prev.leads.map((item) => (item.id === leadId ? { ...item, ...serverLead } : item)),
       }));
-    }).catch((error) => {
+    }).catch(async (error) => {
       console.error('[App] failed to persist lead assignment', error);
-      showNotification('Could not persist lead assignment to backend.');
+      let canonicalLead = lead;
+      try {
+        canonicalLead = (await fetchLeadById(leadId)) || lead;
+      } catch (_) {}
+      setData((prev) => ({
+        ...prev,
+        leads: prev.leads.map((item) =>
+          item.id === leadId ? { ...item, ...canonicalLead } : item
+        ),
+      }));
+      showNotification(error?.message || 'Could not persist lead assignment to backend.');
     });
   };
 
@@ -1047,6 +1069,7 @@ function App() {
 
   const updateLead = (leadId, updates) => {
     const { _actorName, _actorId, ...rest } = updates;
+    const originalLead = data.leads.find((lead) => lead.id === leadId);
     setData((prev) => ({
       ...prev,
       leads: prev.leads.map((lead) => {
@@ -1089,9 +1112,21 @@ function App() {
         ...prev,
         leads: prev.leads.map((item) => (item.id === leadId ? { ...item, ...serverLead } : item)),
       }));
-    }).catch((error) => {
+    }).catch(async (error) => {
       console.error('[App] updateLead failed', error);
-      showNotification('Failed to save lead update to backend.');
+      let canonicalLead = originalLead;
+      try {
+        canonicalLead = (await fetchLeadById(leadId)) || originalLead;
+      } catch (_) {}
+      if (canonicalLead) {
+        setData((prev) => ({
+          ...prev,
+          leads: prev.leads.map((item) =>
+            item.id === leadId ? { ...item, ...canonicalLead } : item
+          ),
+        }));
+      }
+      showNotification(error?.message || 'Failed to save lead update to backend.');
     });
   };
 

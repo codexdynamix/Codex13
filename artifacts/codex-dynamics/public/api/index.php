@@ -32,10 +32,37 @@ function bearerToken(): string {
 function findSession(PDO $pdo, string $table, string $ownerColumn): ?array {
     $token = bearerToken();
     if ($token === '') return null;
-    $stmt = $pdo->prepare("SELECT {$ownerColumn} AS owner_id FROM {$table} WHERE token_hash = ? AND expires_at > ?");
+    $columns = "{$ownerColumn} AS owner_id, token_hash";
+    if ($table === 'portal_sessions') {
+        $columns .= ', is_impersonating, admin_user_id';
+    }
+    $stmt = $pdo->prepare("SELECT {$columns} FROM {$table} WHERE token_hash = ? AND expires_at > ?");
     $stmt->execute([hash('sha256', $token), date('c')]);
     $row = $stmt->fetch();
-    return $row ? ['id' => $row['owner_id']] : null;
+    if (!$row) return null;
+    if ($table === 'admin_sessions') {
+        $pdo->prepare('UPDATE admin_sessions SET last_seen_at = ? WHERE token_hash = ?')
+            ->execute([date('c'), $row['token_hash']]);
+    }
+    $session = ['id' => $row['owner_id'], 'token_hash' => $row['token_hash']];
+    if ($table === 'portal_sessions') {
+        $session['impersonating'] = (bool)($row['is_impersonating'] ?? false);
+        $session['admin_user_id'] = $row['admin_user_id'] ?? null;
+    }
+    return $session;
+}
+
+function staffOnlineSql(PDO $pdo, string $staffAlias = 's'): string {
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $staffAlias)) {
+        throw new InvalidArgumentException('Invalid staff alias.');
+    }
+    $now = $pdo->quote(date('c'));
+    $cutoff = $pdo->quote(date('c', time() - 90));
+    return "(SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END
+        FROM admin_sessions active_session
+        WHERE active_session.user_id = {$staffAlias}.id
+          AND active_session.expires_at > {$now}
+          AND active_session.last_seen_at >= {$cutoff})";
 }
 
 function credentialEncryptionKey(): string {
@@ -66,12 +93,20 @@ function decryptClientSecret(?string $encoded): string {
 
 function requireActiveAdminStaff(PDO $pdo, ?array $session): array {
     if (!$session) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
-    $stmt = $pdo->prepare("SELECT id, role, status, office_id, team_id, capabilities FROM staff_users WHERE id = ? AND deleted_at IS NULL");
+    $stmt = $pdo->prepare("SELECT id, name, role, status, office_id, team_id, capabilities FROM staff_users WHERE id = ? AND deleted_at IS NULL");
     $stmt->execute([$session['id']]);
     $staff = $stmt->fetch();
     if (!$staff || $staff['status'] !== 'Active') jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
     $staff['capabilities'] = json_decode((string)($staff['capabilities'] ?? '{}'), true) ?: [];
     return $staff;
+}
+
+function requireAdminCapability(PDO $pdo, ?array $session, string $capability): array {
+    $actor = requireActiveAdminStaff($pdo, $session);
+    if ($actor['role'] !== 'Super Admin' && ($actor['capabilities'][$capability] ?? true) === false) {
+        jsonResponse(['ok' => false, 'error' => 'This CRM tool is not enabled for your account.'], 403);
+    }
+    return $actor;
 }
 
 function requireSuperAdmin(PDO $pdo, ?array $session): void {
@@ -106,11 +141,13 @@ function activeStaffRecord(PDO $pdo, ?string $id): ?array {
 }
 
 function publicStaffRecord(PDO $pdo, string $id): ?array {
+    $onlineSql = staffOnlineSql($pdo);
     $stmt = $pdo->prepare("
         SELECT s.id, s.email, s.name, s.role, s.office_id, s.team_id, s.status,
                s.capabilities, s.last_login_at, s.created_at, s.deleted_at,
                s.deleted_scope_type, s.deleted_scope_id,
                o.name AS office_name, t.name AS team_name,
+               {$onlineSql} AS is_online,
                (SELECT COUNT(*) FROM leads l WHERE l.deleted_at IS NULL AND (l.assigned_agent_id = s.id OR l.assigned_team_leader_id = s.id)) AS lead_count
         FROM staff_users s
         LEFT JOIN offices o ON o.id = s.office_id
@@ -255,6 +292,17 @@ function actorCanViewLead(array $actor, array $lead): bool {
     }
     if ($actor['role'] === 'Agent') return $lead['assigned_agent_id'] === $actor['id'];
     return false;
+}
+
+function requireVisibleLead(PDO $pdo, array $actor, string $leadId): array {
+    $stmt = $pdo->prepare('SELECT * FROM leads WHERE id = ? AND deleted_at IS NULL');
+    $stmt->execute([$leadId]);
+    $lead = $stmt->fetch();
+    if (!$lead) jsonResponse(['ok' => false, 'error' => 'Client record not found.'], 404);
+    if (!actorCanViewLead($actor, $lead)) {
+        jsonResponse(['ok' => false, 'error' => 'You cannot access this client record.'], 403);
+    }
+    return $lead;
 }
 
 function saveLeadAssignment(PDO $pdo, string $leadId, array $assignment, array $actor): array {
@@ -692,19 +740,31 @@ if (str_starts_with($apiPath, '/admin/') && !$isAdminLogin) {
     $adminSession = findSession($pdo, 'admin_sessions', 'user_id');
     if (!$adminSession) jsonResponse(['ok' => false, 'error' => 'Authentication required.'], 401);
 }
-if (($apiPath === '/portal/data' || $apiPath === '/portal/profile' || $apiPath === '/portal/ticket' || $apiPath === '/portal/notifications' || $apiPath === '/portal/access' || $apiPath === '/portal/mail' || $apiPath === '/portal/mail/reply' || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
+if (($apiPath === '/portal/data'
+    || $apiPath === '/portal/profile'
+    || $apiPath === '/portal/ticket'
+    || $apiPath === '/portal/notifications'
+    || $apiPath === '/portal/access'
+    || $apiPath === '/portal/mail'
+    || $apiPath === '/portal/mail/reply'
+    || $apiPath === '/portal/messages/presence'
+    || $apiPath === '/portal/logout'
+    || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
     $portalSession = findSession($pdo, 'portal_sessions', 'client_id');
-    if (!$portalSession && in_array($apiPath, ['/portal/data', '/portal/access', '/portal/mail'], true) && $method === 'GET') {
-        $admin = findSession($pdo, 'admin_sessions', 'user_id');
-        if ($admin) {
-            $roleStmt = $pdo->prepare("SELECT role FROM staff_users WHERE id = ? AND status = 'Active'");
-            $roleStmt->execute([$admin['id']]);
-            if ($roleStmt->fetchColumn() === 'Super Admin') {
-                $portalSession = ['id' => trim($_GET['client_id'] ?? ''), 'impersonating' => true];
-            }
+    if (!$portalSession) jsonResponse(['ok' => false, 'error' => 'Client sign-in required.'], 401);
+    if ($apiPath !== '/portal/logout') {
+        $portalAccountStmt = $pdo->prepare('SELECT status, portal_enabled FROM portal_clients WHERE id = ?');
+        $portalAccountStmt->execute([$portalSession['id']]);
+        $portalAccount = $portalAccountStmt->fetch();
+        if (!$portalAccount || $portalAccount['status'] !== 'Active' || empty($portalAccount['portal_enabled'])) {
+            jsonResponse(['ok' => false, 'error' => 'This client portal account is unavailable.'], 401);
         }
     }
-    if (!$portalSession) jsonResponse(['ok' => false, 'error' => 'Client sign-in required.'], 401);
+    if ($portalSession['impersonating']
+        && in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
+        && $apiPath !== '/portal/logout') {
+        jsonResponse(['ok' => false, 'error' => 'Client impersonation is read-only.'], 403);
+    }
 }
 
 if ($apiPath === '/healthz') {
@@ -712,6 +772,23 @@ if ($apiPath === '/healthz') {
         'status' => 'ok',
         'database' => $pdo->getAttribute(PDO::ATTR_DRIVER_NAME),
     ]);
+}
+
+if ($apiPath === '/portal/logout' && $method === 'POST') {
+    $token = bearerToken();
+    $pdo->prepare('DELETE FROM portal_sessions WHERE token_hash = ?')
+        ->execute([hash('sha256', $token)]);
+    if (!empty($portalSession['impersonating'])) {
+        $pdo->prepare('INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?)')
+            ->execute([
+                'aud_' . bin2hex(random_bytes(8)),
+                $portalSession['id'],
+                'ADMIN_CLIENT_IMPERSONATION_END',
+                'Staff session ' . (string)($portalSession['admin_user_id'] ?? 'unknown') . ' ended client portal impersonation.',
+                date('c'),
+            ]);
+    }
+    jsonResponse(['ok' => true]);
 }
 
 // -----------------------------------------------------------------------------
@@ -1485,13 +1562,96 @@ if (
 // -----------------------------------------------------------------------------
 // 6. ADMIN: NOTIFICATIONS (Send to client or all clients, Sent Log)
 // -----------------------------------------------------------------------------
+function createAdminNotification(PDO $pdo, string $staffId, string $kind, string $title, string $body): void {
+    $pdo->prepare('INSERT INTO admin_notifications (id, staff_user_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        ->execute([
+            'an_' . bin2hex(random_bytes(12)),
+            $staffId,
+            $kind,
+            substr($title, 0, 255),
+            substr($body, 0, 2000),
+            date('c'),
+        ]);
+}
+
+if ($apiPath === '/admin/notifications') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $limit = max(1, min(100, (int)($_GET['limit'] ?? 50)));
+    $onlyUnread = filter_var($_GET['only_unread'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $where = 'staff_user_id = ?' . ($onlyUnread ? ' AND read_at IS NULL' : '');
+    $count = $pdo->prepare("SELECT COUNT(*) FROM admin_notifications WHERE {$where}");
+    $count->execute([$actor['id']]);
+    $total = (int)$count->fetchColumn();
+    $stmt = $pdo->prepare("SELECT id, kind, title, body, read_at, created_at
+        FROM admin_notifications WHERE {$where} ORDER BY created_at DESC LIMIT ?");
+    $stmt->bindValue(1, $actor['id']);
+    if ($onlyUnread) {
+        $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+    } else {
+        $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+    }
+    $stmt->execute();
+    $rows = $stmt->fetchAll();
+    $unread = $pdo->prepare('SELECT COUNT(*) FROM admin_notifications WHERE staff_user_id = ? AND read_at IS NULL');
+    $unread->execute([$actor['id']]);
+    jsonResponse([
+        'ok' => true,
+        'notifications' => $rows,
+        'unread_count' => (int)$unread->fetchColumn(),
+        'has_more' => $total > count($rows),
+    ]);
+}
+
+if ($apiPath === '/admin/notifications/read-all' && $method === 'POST') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    $stmt = $pdo->prepare('UPDATE admin_notifications SET read_at = ? WHERE staff_user_id = ? AND read_at IS NULL');
+    $stmt->execute([date('c'), $actor['id']]);
+    jsonResponse(['ok' => true, 'updated' => $stmt->rowCount()]);
+}
+
+if ($apiPath === '/admin/notifications/clear' && $method === 'DELETE') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    $stmt = $pdo->prepare('DELETE FROM admin_notifications WHERE staff_user_id = ?');
+    $stmt->execute([$actor['id']]);
+    jsonResponse(['ok' => true, 'deleted' => $stmt->rowCount()]);
+}
+
+if (preg_match('#^/admin/notifications/([^/]+)(?:/(read))?$#', $apiPath, $notificationMatch)) {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    $notificationId = rawurldecode($notificationMatch[1]);
+    if (($notificationMatch[2] ?? '') === 'read' && $method === 'POST') {
+        $stmt = $pdo->prepare('UPDATE admin_notifications SET read_at = ? WHERE id = ? AND staff_user_id = ?');
+        $stmt->execute([date('c'), $notificationId, $actor['id']]);
+        if ($stmt->rowCount() === 0) {
+            $exists = $pdo->prepare('SELECT id FROM admin_notifications WHERE id = ? AND staff_user_id = ?');
+            $exists->execute([$notificationId, $actor['id']]);
+            if (!$exists->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Notification not found.'], 404);
+        }
+        jsonResponse(['ok' => true]);
+    }
+    if (($notificationMatch[2] ?? '') === '' && $method === 'DELETE') {
+        $stmt = $pdo->prepare('DELETE FROM admin_notifications WHERE id = ? AND staff_user_id = ?');
+        $stmt->execute([$notificationId, $actor['id']]);
+        if ($stmt->rowCount() === 0) jsonResponse(['ok' => false, 'error' => 'Notification not found.'], 404);
+        jsonResponse(['ok' => true]);
+    }
+}
+
 if ($apiPath === '/admin/notifications/send') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
     $userId = $input['user_id'] ?? null;
     $message = trim($input['message'] ?? '');
     $kind = $input['kind'] ?? 'info';
     $title = trim($input['title'] ?? 'Administrator Notice');
     $now = date('c');
 
+    if ($userId) {
+        $userId = trim((string)$userId);
+        requireVisibleLead($pdo, $actor, $userId);
+    } elseif ($actor['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can send a notice to all clients.'], 403);
+    }
     if (!$message) {
         jsonResponse(['ok' => false, 'error' => 'Notification message required'], 400);
     }
@@ -1548,37 +1708,130 @@ if ($apiPath === '/client/notifications' || $apiPath === '/portal/notifications'
 }
 
 if ($apiPath === '/admin/notifications/sent-log') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
     if ($method === 'DELETE') {
+        if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can clear the sent log.'], 403);
         $pdo->exec("DELETE FROM notifications");
         jsonResponse(['ok' => true]);
     }
     $userId = $_GET['user_id'] ?? $_GET['userId'] ?? null;
     if ($userId) {
+        requireVisibleLead($pdo, $actor, (string)$userId);
         $stmt = $pdo->prepare("SELECT * FROM notifications WHERE user_id = ? OR user_id IS NULL OR user_id = '' ORDER BY created_at DESC LIMIT 100");
         $stmt->execute([$userId]);
         $logs = $stmt->fetchAll();
     } else {
+        if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can view the complete sent log.'], 403);
         $logs = $pdo->query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 100")->fetchAll();
     }
     jsonResponse(['ok' => true, 'notifications' => $logs, 'log' => $logs, 'total' => count($logs)]);
 }
 
+if (preg_match('#^/admin/notifications/sent-log/([^/]+)$#', $apiPath, $sentNotificationMatch) && $method === 'DELETE') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can delete sent-log records.'], 403);
+    $stmt = $pdo->prepare('DELETE FROM notifications WHERE id = ?');
+    $stmt->execute([rawurldecode($sentNotificationMatch[1])]);
+    jsonResponse(['ok' => true, 'deleted' => $stmt->rowCount()]);
+}
+
 // -----------------------------------------------------------------------------
 // 7. ADMIN <-> CLIENT SUPPORT CHAT
 // -----------------------------------------------------------------------------
-if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
+if ($apiPath === '/admin/messages/unread_counts') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'chat');
+    $scope = buildAdminLeadScope($actor['role'], $actor['office_id'], $actor['team_id'], $actor['id']);
+    [$scopeSql, $scopeParams] = $scope;
+    $stmt = $pdo->prepare("SELECT m.user_id, COUNT(*) AS unread_count
+        FROM messages m INNER JOIN leads l ON l.id = m.user_id
+        WHERE m.sender = 'client' AND m.is_read = 0 AND l.deleted_at IS NULL AND ({$scopeSql})
+        GROUP BY m.user_id");
+    $stmt->execute($scopeParams);
+    $counts = [];
+    $total = 0;
+    foreach ($stmt->fetchAll() as $row) {
+        $counts[$row['user_id']] = (int)$row['unread_count'];
+        $total += (int)$row['unread_count'];
+    }
+    jsonResponse(['ok' => true, 'counts' => $counts, 'total' => $total]);
+}
+
+if ($apiPath === '/admin/presence' && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $stmt = $pdo->prepare('UPDATE admin_sessions SET last_seen_at = ? WHERE token_hash = ? AND user_id = ?');
+    $now = date('c');
+    $stmt->execute([$now, $adminSession['token_hash'], $actor['id']]);
+    jsonResponse(['ok' => true, 'staff_id' => $actor['id'], 'last_seen_at' => $now]);
+}
+
+if ($apiPath === '/admin/messages/presence' || $apiPath === '/portal/messages/presence') {
+    $isAdminPresence = $apiPath === '/admin/messages/presence';
+    $clientId = $isAdminPresence
+        ? trim((string)($_GET['user_id'] ?? $input['user_id'] ?? ''))
+        : (string)$portalSession['id'];
+    if ($isAdminPresence) {
+        $actor = requireAdminCapability($pdo, $adminSession, 'chat');
+        if ($clientId === '') jsonResponse(['ok' => false, 'error' => 'user_id is required.'], 400);
+        requireVisibleLead($pdo, $actor, $clientId);
+        $actorType = 'staff';
+        $actorId = $actor['id'];
+    } else {
+        $actorType = 'client';
+        $actorId = $clientId;
+    }
+
+    if ($method === 'POST') {
+        $typing = $isAdminPresence
+            ? !empty($input['is_typing'])
+            : !empty($input['is_typing']);
+        $now = date('c');
+        $exists = $pdo->prepare('SELECT 1 FROM crm_message_presence WHERE client_id = ? AND actor_type = ? AND actor_id = ?');
+        $exists->execute([$clientId, $actorType, $actorId]);
+        if ($exists->fetchColumn()) {
+            $pdo->prepare('UPDATE crm_message_presence SET is_typing = ?, last_seen_at = ? WHERE client_id = ? AND actor_type = ? AND actor_id = ?')
+                ->execute([$typing ? 1 : 0, $now, $clientId, $actorType, $actorId]);
+        } else {
+            $pdo->prepare('INSERT INTO crm_message_presence (client_id, actor_type, actor_id, is_typing, last_seen_at) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$clientId, $actorType, $actorId, $typing ? 1 : 0, $now]);
+        }
+        jsonResponse(['ok' => true, 'last_seen_at' => $now]);
+    }
+
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $cutoff = date('c', time() - 15);
+    $presenceStmt = $pdo->prepare('SELECT actor_type, actor_id, is_typing, last_seen_at FROM crm_message_presence WHERE client_id = ? AND last_seen_at >= ?');
+    $presenceStmt->execute([$clientId, $cutoff]);
+    $presence = ['client_typing' => false, 'staff_typing' => false, 'staff_online' => false];
+    foreach ($presenceStmt->fetchAll() as $row) {
+        if ($row['actor_type'] === 'client' && (int)$row['is_typing'] === 1) $presence['client_typing'] = true;
+        if ($row['actor_type'] === 'staff') {
+            $presence['staff_online'] = true;
+            if ((int)$row['is_typing'] === 1) $presence['staff_typing'] = true;
+        }
+    }
+    jsonResponse(['ok' => true, 'presence' => $presence]);
+}
+
+if (($apiPath === '/admin/messages' || $apiPath === '/client/messages')
+    && in_array($method, ['GET', 'POST'], true)) {
     $isClientMessageRoute = $apiPath === '/client/messages';
+    $actor = $isClientMessageRoute ? null : requireAdminCapability($pdo, $adminSession, 'chat');
     if ($method === 'POST') {
         $userId = $isClientMessageRoute ? $portalSession['id'] : trim($input['user_id'] ?? $input['userId'] ?? '');
         $body = trim($input['body'] ?? $input['text'] ?? '');
         $sender = $isClientMessageRoute ? 'client' : 'agent';
-        $senderName = $isClientMessageRoute ? 'Client' : ($adminSession['id'] ?? 'Support Agent');
+        $senderName = $isClientMessageRoute ? 'Client' : ($actor['name'] ?? 'Support Agent');
 
         if (!$userId || !$body) {
             jsonResponse(['ok' => false, 'error' => 'user_id and body required'], 400);
         }
+        if (strlen($body) > 5000) jsonResponse(['ok' => false, 'error' => 'Messages cannot exceed 5,000 characters.'], 422);
+        $lead = null;
+        if (!$isClientMessageRoute) {
+            $lead = requireVisibleLead($pdo, $actor, $userId);
+        }
 
-        $msgId = 'msg_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 4);
+        $msgId = 'msg_' . bin2hex(random_bytes(12));
         $now = date('c');
         $stmt = $pdo->prepare("
             INSERT INTO messages (id, user_id, sender, sender_name, body, is_read, created_at)
@@ -1586,12 +1839,33 @@ if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
         ");
         $stmt->execute([$msgId, $userId, $sender, $senderName, $body, $now]);
 
-        // Record audit activity
         $action = $sender === 'client' ? 'SUPPORT_MESSAGE_RECEIVED' : 'SUPPORT_MESSAGE_SENT';
-        $details = $sender === 'client' ? "Client sent message: \"{$body}\"" : "Agent sent message: \"{$body}\"";
-        $auditId = 'aud_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 4);
+        $details = $sender === 'client' ? 'Client sent a support message.' : 'Staff sent a support message.';
+        $auditId = 'aud_' . bin2hex(random_bytes(8));
         $pdo->prepare("INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?)")
-            ->execute([$auditId, $userId, $action, substr($details, 0, 160), $now]);
+            ->execute([$auditId, $userId, $action, $details, $now]);
+
+        if ($isClientMessageRoute) {
+            $leadStmt = $pdo->prepare('SELECT assigned_agent_id, assigned_team_leader_id, assigned_office_id FROM leads WHERE id = ? AND deleted_at IS NULL');
+            $leadStmt->execute([$userId]);
+            $lead = $leadStmt->fetch() ?: null;
+            $recipientIds = array_values(array_unique(array_filter([
+                $lead['assigned_agent_id'] ?? null,
+                $lead['assigned_team_leader_id'] ?? null,
+            ])));
+            if (!$recipientIds && !empty($lead['assigned_office_id'])) {
+                $managerStmt = $pdo->prepare("SELECT id FROM staff_users WHERE office_id = ? AND role = 'Office Manager' AND status = 'Active' AND deleted_at IS NULL");
+                $managerStmt->execute([$lead['assigned_office_id']]);
+                $recipientIds = $managerStmt->fetchAll(PDO::FETCH_COLUMN);
+            }
+            foreach ($recipientIds as $recipientId) {
+                $activeStmt = $pdo->prepare("SELECT id FROM staff_users WHERE id = ? AND status = 'Active' AND deleted_at IS NULL");
+                $activeStmt->execute([$recipientId]);
+                if ($activeStmt->fetchColumn()) {
+                    createAdminNotification($pdo, (string)$recipientId, 'client_message', 'New client message', substr($body, 0, 240));
+                }
+            }
+        }
 
         jsonResponse([
             'ok' => true,
@@ -1602,6 +1876,7 @@ if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
                 'sender_name' => $senderName,
                 'body' => $body,
                 'created_at' => $now,
+                'agent_id' => $isClientMessageRoute ? null : $actor['id'],
             ]
         ]);
     }
@@ -1610,33 +1885,98 @@ if ($apiPath === '/admin/messages' || $apiPath === '/client/messages') {
     if (!$userId) {
         jsonResponse(['ok' => true, 'messages' => [], 'unread_count' => 0]);
     }
-
-    $stmt = $pdo->prepare("SELECT * FROM messages WHERE user_id = ? ORDER BY created_at ASC");
-    $stmt->execute([$userId]);
+    if (!$isClientMessageRoute) {
+        $lead = requireVisibleLead($pdo, $actor, $userId);
+    }
+    $limit = max(1, min(200, (int)($_GET['limit'] ?? 100)));
+    $before = trim((string)($_GET['before'] ?? ''));
+    $where = 'user_id = ?';
+    $params = [$userId];
+    if ($before !== '') {
+        $where .= ' AND created_at < ?';
+        $params[] = $before;
+    }
+    $params[] = $limit + 1;
+    $stmt = $pdo->prepare("SELECT * FROM messages WHERE {$where} ORDER BY created_at DESC LIMIT ?");
+    $stmt->execute($params);
     $msgs = $stmt->fetchAll();
+    $hasMore = count($msgs) > $limit;
+    if ($hasMore) array_pop($msgs);
+    $msgs = array_reverse($msgs);
+    $unreadQuery = $pdo->prepare("SELECT COUNT(*) FROM messages WHERE user_id = ? AND sender = ? AND is_read = 0");
+    $unreadQuery->execute([$userId, $isClientMessageRoute ? 'agent' : 'client']);
+    $unreadCount = (int)$unreadQuery->fetchColumn();
 
     jsonResponse([
         'ok' => true,
-        'user' => ['id' => $userId],
+        'user' => $isClientMessageRoute
+            ? ['id' => $userId]
+            : ['id' => $userId, 'name' => $lead['name'] ?? '', 'email' => $lead['email'] ?? '', 'company' => $lead['company'] ?? ''],
         'messages' => $msgs,
-        'unread_count' => 0,
-        'has_more' => false
+        'unread_count' => $unreadCount,
+        'has_more' => $hasMore,
     ]);
 }
 
-if ($apiPath === '/admin/messages/read') {
+if ($apiPath === '/admin/messages/read' && $method === 'POST') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'chat');
     $userId = trim($input['user_id'] ?? '');
-    if ($userId) {
-        $pdo->prepare("UPDATE messages SET is_read = 1 WHERE user_id = ? AND sender = 'client'")->execute([$userId]);
-    }
-    jsonResponse(['ok' => true]);
+    if (!$userId) jsonResponse(['ok' => false, 'error' => 'user_id is required.'], 400);
+    requireVisibleLead($pdo, $actor, $userId);
+    $stmt = $pdo->prepare("UPDATE messages SET is_read = 1 WHERE user_id = ? AND sender = 'client' AND is_read = 0");
+    $stmt->execute([$userId]);
+    jsonResponse(['ok' => true, 'marked' => $stmt->rowCount()]);
 }
 
-if ($apiPath === '/admin/messages/clear') {
-    $userId = trim($input['user_id'] ?? '');
-    if ($userId) {
-        $pdo->prepare("DELETE FROM messages WHERE user_id = ?")->execute([$userId]);
+if (($apiPath === '/admin/messages/clear' && $method === 'POST')
+    || ($apiPath === '/admin/messages' && $method === 'DELETE')) {
+    $actor = requireAdminCapability($pdo, $adminSession, 'chat');
+    $userId = trim((string)($_GET['user_id'] ?? $input['user_id'] ?? ''));
+    if (!$userId) jsonResponse(['ok' => false, 'error' => 'user_id is required.'], 400);
+    requireVisibleLead($pdo, $actor, $userId);
+    $stmt = $pdo->prepare('DELETE FROM messages WHERE user_id = ?');
+    $stmt->execute([$userId]);
+    jsonResponse(['ok' => true, 'deleted' => $stmt->rowCount()]);
+}
+
+if (preg_match('#^/admin/messages/([^/]+)/attachment$#', $apiPath, $attachmentMatch) && $method === 'GET') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'chat');
+    $messageStmt = $pdo->prepare('SELECT * FROM messages WHERE id = ?');
+    $messageStmt->execute([rawurldecode($attachmentMatch[1])]);
+    $message = $messageStmt->fetch();
+    if (!$message || empty($message['attachment_path'])) jsonResponse(['ok' => false, 'error' => 'Attachment not found.'], 404);
+    requireVisibleLead($pdo, $actor, (string)$message['user_id']);
+
+    $relativePath = str_replace('\\', '/', (string)$message['attachment_path']);
+    $relativePath = ltrim($relativePath, '/');
+    if (!str_starts_with($relativePath, 'uploads/messages/')) {
+        jsonResponse(['ok' => false, 'error' => 'Attachment path is not valid.'], 404);
     }
+    $storageRoot = realpath(dirname(__DIR__) . '/uploads/messages');
+    $filePath = realpath(dirname(__DIR__) . '/' . $relativePath);
+    if (!$storageRoot || !$filePath || !is_file($filePath) || !str_starts_with($filePath, $storageRoot . DIRECTORY_SEPARATOR)) {
+        jsonResponse(['ok' => false, 'error' => 'Attachment file is unavailable.'], 404);
+    }
+    $mime = function_exists('mime_content_type') ? (mime_content_type($filePath) ?: 'application/octet-stream') : 'application/octet-stream';
+    $filename = preg_replace('/[^A-Za-z0-9._ -]/', '_', basename((string)($message['attachment_name'] ?? 'Attachment'))) ?: 'Attachment';
+    $inline = in_array(strtolower($mime), ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'], true);
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . (string)filesize($filePath));
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: private, no-store');
+    header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . addcslashes($filename, '"\\') . '"');
+    readfile($filePath);
+    exit;
+}
+
+if (preg_match('#^/admin/messages/([^/]+)$#', $apiPath, $messageMatch) && $method === 'DELETE') {
+    $actor = requireAdminCapability($pdo, $adminSession, 'chat');
+    $messageStmt = $pdo->prepare('SELECT id, user_id FROM messages WHERE id = ?');
+    $messageStmt->execute([rawurldecode($messageMatch[1])]);
+    $message = $messageStmt->fetch();
+    if (!$message) jsonResponse(['ok' => false, 'error' => 'Message not found.'], 404);
+    requireVisibleLead($pdo, $actor, (string)$message['user_id']);
+    $pdo->prepare('DELETE FROM messages WHERE id = ?')->execute([$message['id']]);
     jsonResponse(['ok' => true]);
 }
 
@@ -2316,10 +2656,12 @@ if ($apiPath === '/admin/staff') {
         $filter .= ' AND s.id = ?';
         $params[] = $actor['id'];
     }
+    $onlineSql = staffOnlineSql($pdo);
     $sql = "
         SELECT s.id, s.email, s.name, s.role, s.office_id, s.team_id, s.status, s.capabilities,
                s.last_login_at, s.created_at, s.deleted_at, s.deleted_scope_type, s.deleted_scope_id,
                o.name AS office_name, t.name AS team_name,
+                {$onlineSql} AS is_online,
                (SELECT COUNT(*) FROM leads l WHERE l.deleted_at IS NULL AND (l.assigned_agent_id = s.id OR l.assigned_team_leader_id = s.id)) AS lead_count
         FROM staff_users s
         LEFT JOIN offices o ON o.id = s.office_id
@@ -2350,6 +2692,58 @@ if (preg_match('#^/admin/staff/([^/]+)/restore$#', $apiPath, $m) && $method === 
         throw $error;
     }
     jsonResponse(['ok' => true, 'staff' => publicStaffRecord($pdo, $staffId), 'leads' => $leads]);
+}
+
+if (preg_match('#^/admin/staff/([^/]+)/capabilities$#', $apiPath, $capabilityMatch)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $staffId = rawurldecode($capabilityMatch[1]);
+    $targetStmt = $pdo->prepare('SELECT id, role, capabilities FROM staff_users WHERE id = ? AND deleted_at IS NULL');
+    $targetStmt->execute([$staffId]);
+    $target = $targetStmt->fetch();
+    if (!$target) jsonResponse(['ok' => false, 'error' => 'Staff member not found.'], 404);
+
+    if ($method === 'GET') {
+        if ($actor['role'] !== 'Super Admin' && $actor['id'] !== $staffId) {
+            jsonResponse(['ok' => false, 'error' => 'You cannot view these staff permissions.'], 403);
+        }
+        jsonResponse([
+            'ok' => true,
+            'capabilities' => json_decode((string)($target['capabilities'] ?? '{}'), true) ?: [],
+        ]);
+    }
+
+    if ($method !== 'PUT') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    if ($actor['role'] !== 'Super Admin') {
+        jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can change staff permissions.'], 403);
+    }
+    $allowedCapabilities = ['lead_upload', 'create_agent', 'registrations', 'notifications', 'security', 'content', 'enquiries', 'chat'];
+    $requested = $input['capabilities'] ?? null;
+    if (!is_array($requested)) jsonResponse(['ok' => false, 'error' => 'A capabilities object is required.'], 422);
+    if (array_diff(array_keys($requested), $allowedCapabilities)) {
+        jsonResponse(['ok' => false, 'error' => 'One or more capability names are not supported.'], 422);
+    }
+    foreach ($requested as $value) {
+        if (!is_bool($value)) jsonResponse(['ok' => false, 'error' => 'Capability values must be true or false.'], 422);
+    }
+    $capabilities = array_fill_keys($allowedCapabilities, true);
+    $existing = json_decode((string)($target['capabilities'] ?? '{}'), true);
+    if (is_array($existing)) {
+        foreach ($allowedCapabilities as $key) {
+            if (array_key_exists($key, $existing)) $capabilities[$key] = (bool)$existing[$key];
+        }
+    }
+    foreach ($requested as $key => $enabled) $capabilities[$key] = $enabled;
+    $pdo->prepare('UPDATE staff_users SET capabilities = ? WHERE id = ?')
+        ->execute([json_encode($capabilities, JSON_THROW_ON_ERROR), $staffId]);
+    $pdo->prepare('INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?)')
+        ->execute([
+            'aud_' . bin2hex(random_bytes(8)),
+            $staffId,
+            'STAFF_CAPABILITIES_UPDATED',
+            'Updated CRM tool permissions by ' . $actor['id'] . '.',
+            date('c'),
+        ]);
+    jsonResponse(['ok' => true, 'capabilities' => $capabilities]);
 }
 
 if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
@@ -3315,8 +3709,8 @@ if ($apiPath === '/admin/login' && $method === 'POST') {
         $pdo->prepare("UPDATE staff_users SET password = ? WHERE id = ?")->execute([password_hash($password, PASSWORD_DEFAULT), $staff['id']]);
     }
     $token = bin2hex(random_bytes(32));
-    $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
-        ->execute([hash('sha256', $token), $staff['id'], date('c', time() + 86400 * 14), $now]);
+    $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)")
+        ->execute([hash('sha256', $token), $staff['id'], date('c', time() + 86400 * 14), $now, $now]);
 
     jsonResponse([
         'ok' => true,
@@ -3383,6 +3777,54 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
             'portalEnabled' => (bool)$client['portal_enabled'],
             'tier' => $client['tier'],
             'lastLoginAt' => $now,
+            'createdAt' => $client['created_at'],
+        ],
+    ]);
+}
+
+if (preg_match('#^/admin/clients/([^/]+)/impersonate$#', $apiPath, $impersonationMatch) && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $clientId = rawurldecode($impersonationMatch[1]);
+    requireVisibleLead($pdo, $actor, $clientId);
+    $clientStmt = $pdo->prepare('SELECT * FROM portal_clients WHERE id = ?');
+    $clientStmt->execute([$clientId]);
+    $client = $clientStmt->fetch();
+    if (!$client || empty($client['portal_enabled']) || $client['status'] !== 'Active') {
+        jsonResponse(['ok' => false, 'error' => 'This client does not have an active portal account.'], 409);
+    }
+
+    $now = date('c');
+    $token = bin2hex(random_bytes(32));
+    $expiresAt = date('c', time() + 1800);
+    $pdo->prepare('INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at, is_impersonating, admin_user_id) VALUES (?, ?, ?, ?, 1, ?)')
+        ->execute([hash('sha256', $token), $clientId, $expiresAt, $now, $actor['id']]);
+    $pdo->prepare('INSERT INTO audit_logs (id, user_id, client_name, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        ->execute([
+            'aud_' . bin2hex(random_bytes(8)),
+            $clientId,
+            $client['name'],
+            'ADMIN_CLIENT_IMPERSONATION_START',
+            'Staff member ' . $actor['id'] . ' started a read-only client portal session.',
+            $now,
+        ]);
+
+    jsonResponse([
+        'ok' => true,
+        'token' => $token,
+        'expires_at' => $expiresAt,
+        'client' => [
+            'id' => $client['id'],
+            'name' => $client['name'],
+            'company' => $client['company'],
+            'email' => $client['email'],
+            'phone' => $client['phone'],
+            'address' => $client['address'],
+            'country' => $client['country'],
+            'countryCode' => $client['country_code'],
+            'status' => $client['status'],
+            'portalEnabled' => (bool)$client['portal_enabled'],
+            'tier' => $client['tier'],
+            'lastLoginAt' => $client['last_login_at'],
             'createdAt' => $client['created_at'],
         ],
     ]);
