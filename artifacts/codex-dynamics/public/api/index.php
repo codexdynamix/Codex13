@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/lead-access.php';
 
 $pdo = getDb();
 $method = $_SERVER['REQUEST_METHOD'];
@@ -498,26 +499,16 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         jsonResponse(['ok' => false, 'error' => 'Administrator account is unavailable.'], 401);
     }
 
-    $scopeSql = '';
-    $scopeParams = [];
-    if ($admin['role'] === 'Office Manager') {
-        $scopeSql = 'l.assigned_office_id = ?';
-        $scopeParams[] = $admin['office_id'] ?: '__no_office__';
-    } elseif ($admin['role'] === 'Team Leader') {
-        if (!empty($admin['team_id'])) {
-            $scopeSql = '(l.assigned_team_id = ? OR l.assigned_team_leader_id = ?)';
-            $scopeParams[] = $admin['team_id'];
-            $scopeParams[] = $adminSession['id'];
-        } else {
-            $scopeSql = 'l.assigned_team_leader_id = ?';
-            $scopeParams[] = $adminSession['id'];
-        }
-    } elseif ($admin['role'] === 'Agent') {
-        $scopeSql = 'l.assigned_agent_id = ?';
-        $scopeParams[] = $adminSession['id'];
-    } elseif ($admin['role'] !== 'Super Admin') {
+    $scope = buildAdminLeadScope(
+        (string)$admin['role'],
+        $admin['office_id'] !== null ? (string)$admin['office_id'] : null,
+        $admin['team_id'] !== null ? (string)$admin['team_id'] : null,
+        (string)$adminSession['id']
+    );
+    if ($scope === null) {
         jsonResponse(['ok' => false, 'error' => 'This account cannot access CRM leads.'], 403);
     }
+    [$scopeSql, $scopeParams] = $scope;
 
     if (($isAdminLeadCollection && $method === 'GET') || ($isAdminLeadSearch && $method === 'GET')) {
         $filters = [];
@@ -1516,10 +1507,10 @@ if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
 // -----------------------------------------------------------------------------
 if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === 'POST') {
     $leadId = $m[1];
-    $officeId = $input['officeId'] ?? $input['office_id'] ?? null;
-    $teamId = $input['teamId'] ?? $input['team_id'] ?? null;
-    $teamLeaderId = $input['teamLeaderId'] ?? $input['team_leader_id'] ?? null;
-    $agentId = $input['agentId'] ?? $input['agent_id'] ?? null;
+    $officeId = $input['assigned_office_id'] ?? $input['officeId'] ?? $input['office_id'] ?? null;
+    $teamId = $input['assigned_team_id'] ?? $input['teamId'] ?? $input['team_id'] ?? null;
+    $teamLeaderId = $input['assigned_team_leader_id'] ?? $input['teamLeaderId'] ?? $input['team_leader_id'] ?? null;
+    $agentId = $input['assigned_agent_id'] ?? $input['agentId'] ?? $input['agent_id'] ?? null;
     $now = date('c');
 
     $pdo->prepare("UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_team_leader_id = ?, assigned_agent_id = ?, updated_at = ? WHERE id = ?")

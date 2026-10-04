@@ -1386,7 +1386,7 @@ export default function LeadProfileModal({
                 Reassign
               </div>
               <div style={{ fontSize: 11, color: 'var(--crm-text-secondary)', marginBottom: 12 }}>
-                Pick an agent directly - office and team are filled automatically. Or assign to just an office or team.
+                Changing office clears team and agent; choosing a team fills its office and clears agent. Direct Team Leader ownership is preserved when changing office or team. Choosing an agent fills its office/team and clears direct ownership; choosing a direct Team Leader clears the agent.
               </div>
 
               {/* Quick assign to agent */}
@@ -1402,6 +1402,7 @@ export default function LeadProfileModal({
                     const agentId = e.target.value;
                     setReassignAgentId(agentId);
                     if (agentId) {
+                      setReassignTeamLeaderId('');
                       const agent = data.users.find((u) => u.id === agentId);
                       if (agent) {
                         setReassignTeamId(agent.teamId || '');
@@ -1488,13 +1489,14 @@ export default function LeadProfileModal({
                       }}
                     >
                       <option value="">None</option>
-                      {(data.teams || [])
-                        .filter((t) => t.officeId === reassignOfficeId)
-                        .map((t) => (
+                      {(data.teams || []).map((t) => {
+                        const officeName = (data.offices || []).find((office) => office.id === t.officeId)?.name;
+                        return (
                           <option key={t.id} value={t.id}>
-                            {t.name}
+                            {t.name}{officeName ? ` — ${officeName}` : ' — independent'}
                           </option>
-                        ))}
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
@@ -1515,7 +1517,11 @@ export default function LeadProfileModal({
                 className="crm-super-admin-select"
                 style={{ width: '100%' }}
                 value={reassignTeamLeaderId}
-                onChange={(e) => setReassignTeamLeaderId(e.target.value)}
+                onChange={(e) => {
+                  const teamLeaderId = e.target.value;
+                  setReassignTeamLeaderId(teamLeaderId);
+                  if (teamLeaderId) setReassignAgentId('');
+                }}
               >
                 <option value="">No direct team leader</option>
                 {(data.users || [])

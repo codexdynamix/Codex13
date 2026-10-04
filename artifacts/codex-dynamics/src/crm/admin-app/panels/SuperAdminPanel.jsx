@@ -47,6 +47,8 @@ import {
 } from '../adminApi';
 import { fetchAdminSettings } from '../../platformDefaults';
 import { getLeadProfilePath } from '../leadProfileRouting';
+import { matchesLeadOwnershipFilter, matchesStaffStructureFilter } from '../leadOwnership';
+import { normalizeCsvHeader, parseCsvRows } from '../csvUtils';
 import {
   createLogAdminAction,
   createLogActivity,
@@ -59,6 +61,8 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
   const [filterOffice, setFilterOffice] = useState('');
   const [filterTeam, setFilterTeam] = useState('');
   const [filterAgent, setFilterAgent] = useState('');
+  const [filterTeamLeader, setFilterTeamLeader] = useState('');
+  const [filterOwnership, setFilterOwnership] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
   const [page, setPage] = useState(1);
@@ -385,18 +389,19 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     const headers = [
       'Lead ID', 'Name', 'First Name', 'Last Name', 'Email', 'Phone',
       'Country', 'Status', 'Stage', 'Funnel',
-      'Office', 'Team', 'Agent',
+      'Office', 'Team', 'Agent', 'Team Leader', 'assigned_team_leader_id',
       'Registered Date', 'Created At', 'Updated At',
     ];
     const rows = (data.leads || []).map(lead => {
       const office = (data.offices || []).find(item => item.id === lead.assignedToOffice);
       const team = (data.teams || []).find(item => item.id === lead.assignedToTeam);
       const agent = (data.users || []).find(item => item.id === lead.assignedToAgent);
+      const teamLeader = (data.users || []).find(item => item.id === lead.assignedToTeamLeader);
       const name = lead.name || `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
       return [
         lead.id, name, lead.firstName, lead.lastName, lead.email, lead.phone,
         lead.country, lead.status, lead.stage, lead.funnel,
-        office?.name, team?.name, agent?.name,
+        office?.name, team?.name, agent?.name, teamLeader?.name, lead.assignedToTeamLeader,
         lead.registeredDate, lead.createdAt, lead.updatedAt,
       ].map(csvCell).join(',');
     });
@@ -414,18 +419,17 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
   };
 
   const parseCsvLeads = (text) => {
-    const lines = text.trim().split('\n').filter(l => l.trim());
-    if (lines.length < 2) return { rows: [], error: 'CSV must have a header row and at least one data row.' };
-    const header = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+    const table = parseCsvRows(text);
+    if (table.length < 2) return { rows: [], error: 'CSV must have a header row and at least one data row.' };
+    const header = table[0].map(normalizeCsvHeader);
     const required = ['first_name', 'last_name', 'email'];
     const missing = required.filter(r => !header.includes(r));
     if (missing.length) return { rows: [], error: `Missing required columns: ${missing.join(', ')}` };
     const rows = [];
     const errors = [];
-    lines.slice(1).forEach((line, i) => {
-      const cols = line.split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
+    table.slice(1).forEach((cols, i) => {
       const obj = {};
-      header.forEach((h, idx) => { obj[h] = cols[idx] || ''; });
+      header.forEach((h, idx) => { obj[h] = String(cols[idx] ?? '').trim(); });
       if (!obj.email || !obj.email.includes('@')) {
         errors.push(`Row ${i + 2}: invalid email`);
       } else {
@@ -765,10 +769,12 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return data.leads.filter(lead => {
-      if (showUnassignedOnly && lead.assignedToAgent) return false;
+      if (showUnassignedOnly && !matchesLeadOwnershipFilter(lead, 'unassigned')) return false;
       if (filterOffice && lead.assignedToOffice !== filterOffice) return false;
       if (filterTeam && lead.assignedToTeam !== filterTeam) return false;
       if (filterAgent && lead.assignedToAgent !== filterAgent) return false;
+      if (filterTeamLeader && lead.assignedToTeamLeader !== filterTeamLeader) return false;
+      if (filterOwnership && !matchesLeadOwnershipFilter(lead, filterOwnership)) return false;
       if (filterStatus && normalizeStage(lead.stage) !== filterStatus) return false;
       if (q && !(
         (lead.firstName || '').toLowerCase().includes(q) ||
@@ -779,7 +785,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
       )) return false;
       return true;
     });
-  }, [data.leads, search, filterOffice, filterTeam, filterAgent, filterStatus, showUnassignedOnly]);
+  }, [data.leads, search, filterOffice, filterTeam, filterAgent, filterTeamLeader, filterOwnership, filterStatus, showUnassignedOnly]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -1201,12 +1207,24 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
               <option value="">All Agents</option>
               {agentsForFilter.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
+            <select className="crm-super-admin-select" value={filterTeamLeader} onChange={e => { setFilterTeamLeader(e.target.value); setPage(1); }} style={{ flex: 1, minWidth: 150 }}>
+              <option value="">All Team Leaders</option>
+              {data.users.filter(u => u.role === ROLE.TEAM_LEADER).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            <select className="crm-super-admin-select" value={filterOwnership} onChange={e => { setFilterOwnership(e.target.value); setPage(1); }} style={{ flex: 1, minWidth: 150 }}>
+              <option value="">All Ownership Types</option>
+              <option value="team-leader-owned">Direct Team Leader</option>
+              <option value="office-only">Office only</option>
+              <option value="team-no-agent">Team, no agent</option>
+              <option value="agent-assigned">Agent assigned</option>
+              <option value="unassigned">Completely unassigned</option>
+            </select>
             <select className="crm-super-admin-select" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }} style={{ flex: 1, minWidth: 120 }}>
               <option value="">All Statuses</option>
               {LEAD_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {(search || filterOffice || filterTeam || filterAgent || filterStatus) && (
-              <button className="crm-super-admin-btn crm-super-admin-btn-small" onClick={() => { setSearch(''); setFilterOffice(''); setFilterTeam(''); setFilterAgent(''); setFilterStatus(''); setPage(1); }}>Clear</button>
+            {(search || filterOffice || filterTeam || filterAgent || filterTeamLeader || filterOwnership || filterStatus) && (
+              <button className="crm-super-admin-btn crm-super-admin-btn-small" onClick={() => { setSearch(''); setFilterOffice(''); setFilterTeam(''); setFilterAgent(''); setFilterTeamLeader(''); setFilterOwnership(''); setFilterStatus(''); setPage(1); }}>Clear</button>
             )}
           </div>
 
@@ -1217,7 +1235,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
               onClick={() => { setShowUnassignedOnly(v => !v); setPage(1); }}
               style={showUnassignedOnly ? { background: 'var(--crm-accent, #0A84FF)', color: '#fff', borderColor: 'transparent' } : {}}
             >
-              {showUnassignedOnly ? '✓ Showing Unassigned' : 'Show Unassigned Only'}
+              {showUnassignedOnly ? '✓ Showing Completely Unassigned' : 'Show Completely Unassigned'}
             </button>
             <button
               className={`crm-super-admin-btn crm-super-admin-btn-small${bulkMode === 'assign' ? '' : ' crm-super-admin-btn-secondary'}`}
@@ -1426,6 +1444,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
                   <th>Status</th>
                   <th>Office</th>
                   <th>Team</th>
+                  <th>Direct Team Leader</th>
                   <th>Agent</th>
                   <th>Registered</th>
                   <th>Last Activity</th>
@@ -1434,7 +1453,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
               </thead>
               <tbody>
                 {paged.length === 0 ? (
-                  <tr><td colSpan={11} style={{ textAlign: 'center', padding: 20, color: 'var(--crm-text-secondary)' }}>No leads match your filters.</td></tr>
+                  <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--crm-text-secondary)' }}>No leads match your filters.</td></tr>
                 ) : paged.map(lead => (
                   <React.Fragment key={lead.id}>
                   <tr style={{ cursor: 'pointer', background: selected.includes(lead.id) ? 'var(--crm-card)' : undefined }} onClick={() => openProfile(lead)}>
@@ -1500,6 +1519,9 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
                     </td>
                     <td style={{ color: lead.assignedToTeam ? 'var(--crm-text-primary)' : 'var(--crm-text-secondary)', fontSize: 12 }}>
                       {lead.assignedToTeam ? getTeamName(lead.assignedToTeam, data.teams) : '-'}
+                    </td>
+                    <td style={{ color: lead.assignedToTeamLeader ? 'var(--crm-accent)' : 'var(--crm-text-secondary)', fontSize: 12 }}>
+                      {lead.assignedToTeamLeader ? getUserName(lead.assignedToTeamLeader, data.users) : '-'}
                     </td>
                     <td style={{ color: lead.assignedToAgent ? '#0ECB81' : 'var(--crm-text-secondary)', fontSize: 12 }}>
                       {lead.assignedToAgent ? getUserName(lead.assignedToAgent, data.users) : '-'}
@@ -2284,6 +2306,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
   // Unified staff search (Staff tab)
   const [staffSearch, setStaffSearch] = useState('');
   const [staffRoleFilter, setStaffRoleFilter] = useState(''); // '' | 'Office Manager' | 'Team Leader' | 'Agent'
+  const [staffStructureFilter, setStaffStructureFilter] = useState('all');
 
   // Staff blocking
   // Derived from data.users so the badge always reflects backend truth
@@ -2852,6 +2875,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     if (!isStaff) return false;
     if (u.status === 'Disabled') return false;
     if (staffRoleFilter && u.role !== staffRoleFilter) return false;
+    if (!matchesStaffStructureFilter(u, staffStructureFilter)) return false;
     if (!staffSearch.trim()) return true;
     const q = staffSearch.toLowerCase();
     const office = data.offices.find(o => o.id === u.officeId);
@@ -3650,8 +3674,14 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
                           <option value={ROLE.TEAM_LEADER}>Team Leaders</option>
                           <option value={ROLE.AGENT}>Agents</option>
                         </select>
-                        {(staffSearch || staffRoleFilter) && (
-                          <button className="crm-super-admin-btn crm-super-admin-btn-small" style={{ background: 'var(--crm-border)', color: 'var(--crm-text-primary)' }} onClick={() => { setStaffSearch(''); setStaffRoleFilter(''); }}>✕ Clear</button>
+                        <select className="crm-super-admin-select" style={{ flex: '0 0 210px' }} value={staffStructureFilter} onChange={e => setStaffStructureFilter(e.target.value)}>
+                          <option value="all">All structures</option>
+                          <option value="independent">No office or team</option>
+                          <option value="office-no-team">Office, no team</option>
+                          <option value="team-assigned">Team assigned</option>
+                        </select>
+                        {(staffSearch || staffRoleFilter || staffStructureFilter !== 'all') && (
+                          <button className="crm-super-admin-btn crm-super-admin-btn-small" style={{ background: 'var(--crm-border)', color: 'var(--crm-text-primary)' }} onClick={() => { setStaffSearch(''); setStaffRoleFilter(''); setStaffStructureFilter('all'); }}>✕ Clear</button>
                         )}
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--crm-text-secondary)', marginBottom: 8 }}>
