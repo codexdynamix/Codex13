@@ -5163,4 +5163,6 @@ if ($apiPath === '/portal/ticket' && $method === 'POST') {
 }
 
 // Unknown routes must fail explicitly instead of looking like successful API calls.
+require_once __DIR__ . '/feature-routes.php';
+handleCodexDynamicsFeatureRoutes($pdo, $apiPath, $method, $input, $adminSession ?? null, $portalSession ?? null);
 jsonResponse(['ok' => false, 'error' => 'API route not found'], 404);

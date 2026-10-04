@@ -18,7 +18,7 @@ function jsonResponse(mixed $data, int $status = 200): void {
     header('Content-Type: application/json; charset=utf-8');
     header('Access-Control-Allow-Origin: *');
     header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Chat-Token');
     echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -1059,10 +1059,32 @@ function initSchema(PDO $pdo): void {
     ensureDatabaseColumn($pdo, 'blogs', 'deleted_at', 'TEXT NULL');
     ensureDatabaseColumn($pdo, 'reviews', 'deleted_at', 'TEXT NULL');
     ensureDatabaseColumn($pdo, 'backlinks', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'client_projects', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'clients', 'merged_into_client_id', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'client_identity_reviews', 'reviewed_by', 'VARCHAR(191) NULL');
+    ensureDatabaseColumn($pdo, 'client_identity_reviews', 'reviewed_at', 'VARCHAR(40) NULL');
+    ensureDatabaseColumn($pdo, 'client_identity_reviews', 'resolution', 'TEXT NULL');
 
     $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
     if ($driver === 'sqlite') {
         $pdo->exec("
+            CREATE TABLE IF NOT EXISTS blog_categories (
+                id VARCHAR(191) PRIMARY KEY,
+                name VARCHAR(191) NOT NULL,
+                slug VARCHAR(191) NOT NULL UNIQUE,
+                parent VARCHAR(191) NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS visitor_chat_sessions (
+                token_hash VARCHAR(64) PRIMARY KEY,
+                client_id VARCHAR(191) NOT NULL REFERENCES clients(id),
+                created_at VARCHAR(40) NOT NULL,
+                last_message_at VARCHAR(40) NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_visitor_chat_sessions_client
+                ON visitor_chat_sessions (client_id);
             CREATE TABLE IF NOT EXISTS staff_notes (
                 id VARCHAR(191) PRIMARY KEY,
                 staff_id VARCHAR(191) NOT NULL REFERENCES staff_users(id),
@@ -1118,6 +1140,22 @@ function initSchema(PDO $pdo): void {
         // legacy tables use mixed key widths that cannot be safely rebuilt
         // without an explicit database migration window.
         $pdo->exec("
+            CREATE TABLE IF NOT EXISTS blog_categories (
+                id VARCHAR(191) PRIMARY KEY,
+                name VARCHAR(191) NOT NULL,
+                slug VARCHAR(191) NOT NULL UNIQUE,
+                parent VARCHAR(191) NULL,
+                is_default TINYINT(1) NOT NULL DEFAULT 0,
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS visitor_chat_sessions (
+                token_hash VARCHAR(64) PRIMARY KEY,
+                client_id VARCHAR(191) NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                last_message_at VARCHAR(40) NULL,
+                INDEX idx_visitor_chat_sessions_client (client_id)
+            );
             CREATE TABLE IF NOT EXISTS staff_notes (
                 id VARCHAR(191) PRIMARY KEY,
                 staff_id VARCHAR(191) NOT NULL,
@@ -1147,6 +1185,26 @@ function initSchema(PDO $pdo): void {
                 imported_at VARCHAR(40) NOT NULL
             );
         ");
+    }
+    ensureDatabaseColumn($pdo, 'staff_notes', 'created_by_name', 'VARCHAR(191) NULL');
+
+    $defaultBlogCategories = [
+        ['engineering', 'Engineering'],
+        ['design-systems', 'Design Systems'],
+        ['performance', 'Performance'],
+        ['architecture', 'Architecture'],
+        ['case-study', 'Case Study'],
+        ['strategy', 'Strategy'],
+        ['product-updates', 'Product Updates'],
+    ];
+    $categoryExists = $pdo->prepare('SELECT id FROM blog_categories WHERE id = ?');
+    $categoryInsert = $pdo->prepare('INSERT INTO blog_categories (id, name, slug, parent, is_default, created_at, updated_at) VALUES (?, ?, ?, NULL, 1, ?, ?)');
+    $categoryNow = date('c');
+    foreach ($defaultBlogCategories as [$categoryId, $categoryName]) {
+        $categoryExists->execute([$categoryId]);
+        if (!$categoryExists->fetchColumn()) {
+            $categoryInsert->execute([$categoryId, $categoryName, $categoryId, $categoryNow, $categoryNow]);
+        }
     }
 }
 
