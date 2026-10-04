@@ -118,6 +118,7 @@ function initSchema(PDO $pdo): void {
             client_password TEXT,
             assigned_office_id TEXT,
             assigned_team_id TEXT,
+            assigned_team_leader_id TEXT,
             assigned_agent_id TEXT,
             assigned_by TEXT,
             is_online INTEGER DEFAULT 0,
@@ -141,6 +142,17 @@ function initSchema(PDO $pdo): void {
         $column = $pdo->query("SHOW COLUMNS FROM leads LIKE 'deleted_at'")->fetch();
         if (!$column) {
             $pdo->exec('ALTER TABLE leads ADD COLUMN deleted_at TEXT NULL');
+        }
+    }
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $leadColumns = array_column($pdo->query('PRAGMA table_info(leads)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('assigned_team_leader_id', $leadColumns, true)) {
+            $pdo->exec('ALTER TABLE leads ADD COLUMN assigned_team_leader_id TEXT');
+        }
+    } else {
+        $column = $pdo->query("SHOW COLUMNS FROM leads LIKE 'assigned_team_leader_id'")->fetch();
+        if (!$column) {
+            $pdo->exec('ALTER TABLE leads ADD COLUMN assigned_team_leader_id TEXT NULL');
         }
     }
 

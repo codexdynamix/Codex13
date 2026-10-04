@@ -110,7 +110,10 @@ export default function StaffProfileModal({
       return allLeads.filter((l) => l.assignedToOffice === resolvedOfficeId);
     }
     if (liveStaff.role === ROLE.TEAM_LEADER) {
-      return allLeads.filter((l) => l.assignedToTeam === resolvedTeamId);
+      return allLeads.filter((l) =>
+        (resolvedTeamId && l.assignedToTeam === resolvedTeamId) ||
+        l.assignedToTeamLeader === liveStaff.id
+      );
     }
     return allLeads.filter((l) => l.assignedToAgent === liveStaff.id);
   }, [data?.leads, liveStaff, resolvedOfficeId, resolvedTeamId]);

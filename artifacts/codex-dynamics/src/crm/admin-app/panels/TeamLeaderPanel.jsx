@@ -204,7 +204,7 @@ function TeamLeaderPanel({ data, setData, currentUser, createAgent, canCreateAge
   const [editLead, setEditLead] = useState(null);
   const [commentLead, setCommentLead] = useState(null);
   const teamAgents = useMemo(
-    () => assignableAgents(data.users, currentUser, { teamId: currentUser.teamId }),
+    () => currentUser.teamId ? assignableAgents(data.users, currentUser, { teamId: currentUser.teamId }) : [],
     [data.users, currentUser.teamId]
   );
 
@@ -269,8 +269,11 @@ function TeamLeaderPanel({ data, setData, currentUser, createAgent, canCreateAge
   }, [communicationModal.show]);
   const onlineAgents = teamAgents.filter((a) => a.isLoggedIn).length;
   const teamLeads = useMemo(
-    () => data.leads.filter((lead) => lead.assignedToTeam === currentUser.teamId),
-    [data.leads, currentUser.teamId]
+    () => data.leads.filter((lead) =>
+      (currentUser.teamId && lead.assignedToTeam === currentUser.teamId) ||
+      lead.assignedToTeamLeader === currentUser.id
+    ),
+    [data.leads, currentUser.teamId, currentUser.id]
   );
 
   // Global search function
@@ -1027,7 +1030,7 @@ function TeamLeaderPanel({ data, setData, currentUser, createAgent, canCreateAge
 
           {showCreateLead && createLead && (
             <CreateLeadModal
-              scope={{ officeId: currentUser.officeId, teamId: currentUser.teamId }}
+              scope={{ officeId: currentUser.officeId, teamId: currentUser.teamId, teamLeaderId: currentUser.id }}
               teamsForOffice={[]}
               agents={teamAgents}
               onClose={() => setShowCreateLead(false)}

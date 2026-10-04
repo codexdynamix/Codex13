@@ -504,8 +504,14 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         $scopeSql = 'l.assigned_office_id = ?';
         $scopeParams[] = $admin['office_id'] ?: '__no_office__';
     } elseif ($admin['role'] === 'Team Leader') {
-        $scopeSql = 'l.assigned_team_id = ?';
-        $scopeParams[] = $admin['team_id'] ?: '__no_team__';
+        if (!empty($admin['team_id'])) {
+            $scopeSql = '(l.assigned_team_id = ? OR l.assigned_team_leader_id = ?)';
+            $scopeParams[] = $admin['team_id'];
+            $scopeParams[] = $adminSession['id'];
+        } else {
+            $scopeSql = 'l.assigned_team_leader_id = ?';
+            $scopeParams[] = $adminSession['id'];
+        }
     } elseif ($admin['role'] === 'Agent') {
         $scopeSql = 'l.assigned_agent_id = ?';
         $scopeParams[] = $adminSession['id'];
@@ -531,7 +537,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
             $needle = '%' . $search . '%';
             array_push($params, $needle, $needle, $needle, $needle, $needle, $needle);
         }
-        foreach (['stage' => 'l.stage', 'office_id' => 'l.assigned_office_id', 'team_id' => 'l.assigned_team_id', 'agent_id' => 'l.assigned_agent_id'] as $queryKey => $column) {
+        foreach (['stage' => 'l.stage', 'office_id' => 'l.assigned_office_id', 'team_id' => 'l.assigned_team_id', 'team_leader_id' => 'l.assigned_team_leader_id', 'agent_id' => 'l.assigned_agent_id'] as $queryKey => $column) {
             if (isset($_GET[$queryKey]) && (string)$_GET[$queryKey] !== '') {
                 $filters[] = "{$column} = ?";
                 $params[] = (string)$_GET[$queryKey];
@@ -642,14 +648,15 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 'client_password' => trim((string)($row['client_password'] ?? $row['password'] ?? '')),
                 'assigned_office_id' => $row['assigned_office_id'] ?? null,
                 'assigned_team_id' => $row['assigned_team_id'] ?? null,
+                'assigned_team_leader_id' => $row['assigned_team_leader_id'] ?? null,
                 'assigned_agent_id' => $row['assigned_agent_id'] ?? null,
             ];
         }
 
         $now = date('c');
         $insertLead = $pdo->prepare("
-            INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, client_password, assigned_office_id, assigned_team_id, assigned_agent_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, client_password, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $importedLeads = [];
         $pdo->beginTransaction();
@@ -676,7 +683,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                     $lead['phone'], $lead['country'], $lead['country_code'], $lead['stage'], $lead['stage'],
                     $lead['funnel'], $lead['company'], $lead['service'], $lead['budget'], $lead['timeline'],
                     $lead['message'], $lead['notes'], $lead['client_password'], $lead['assigned_office_id'],
-                    $lead['assigned_team_id'], $lead['assigned_agent_id'], $now, $now,
+                    $lead['assigned_team_id'], $lead['assigned_team_leader_id'], $lead['assigned_agent_id'], $now, $now,
                 ]);
                 if ($lead['client_password'] !== '') ensurePortalClientForLead($pdo, $lead, $lead['client_password'], $now);
                 $importedLeads[] = normalizeLeadRow($lead + [
@@ -716,7 +723,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
         $now = date('c');
         $stage = trim((string)($input['stage'] ?? $input['status'] ?? 'New')) ?: 'New';
         $source = trim((string)($input['source'] ?? 'manual_crm_entry'));
-        $stmt = $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $pdo->beginTransaction();
         try {
             $conflict = findClientIdentifierConflict($pdo, $email, $phone);
@@ -745,6 +752,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 trim((string)($input['notes'] ?? '')),
                 $input['assigned_office_id'] ?? null,
                 $input['assigned_team_id'] ?? null,
+                $input['assigned_team_leader_id'] ?? null,
                 $input['assigned_agent_id'] ?? null,
                 $now, $now,
             ]);
@@ -780,7 +788,7 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 'first_name', 'last_name', 'name', 'email', 'phone', 'country',
                 'country_code', 'stage', 'status', 'funnel', 'company', 'service',
                 'budget', 'timeline', 'message', 'source', 'notes',
-                'assigned_office_id', 'assigned_team_id', 'assigned_agent_id',
+                'assigned_office_id', 'assigned_team_id', 'assigned_team_leader_id', 'assigned_agent_id',
             ];
             $updates = [];
             foreach ($allowed as $field) {
@@ -1495,7 +1503,8 @@ if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
         if (!empty($input['name'])) $pdo->prepare("UPDATE staff_users SET name = ? WHERE id = ?")->execute([$input['name'], $staffId]);
         if (!empty($input['email'])) $pdo->prepare("UPDATE staff_users SET email = ? WHERE id = ?")->execute([$input['email'], $staffId]);
         if (!empty($input['password'])) $pdo->prepare("UPDATE staff_users SET password = ? WHERE id = ?")->execute([$input['password'], $staffId]);
-        if (isset($input['team_id'])) $pdo->prepare("UPDATE staff_users SET team_id = ? WHERE id = ?")->execute([$input['team_id'], $staffId]);
+        if (array_key_exists('team_id', $input)) $pdo->prepare("UPDATE staff_users SET team_id = ? WHERE id = ?")->execute([$input['team_id'], $staffId]);
+        if (array_key_exists('office_id', $input)) $pdo->prepare("UPDATE staff_users SET office_id = ? WHERE id = ?")->execute([$input['office_id'], $staffId]);
         $stmtS = $pdo->prepare("SELECT * FROM staff_users WHERE id = ?");
         $stmtS->execute([$staffId]);
         jsonResponse(['ok' => true, 'staff' => $stmtS->fetch()]);
@@ -1509,11 +1518,12 @@ if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === '
     $leadId = $m[1];
     $officeId = $input['officeId'] ?? $input['office_id'] ?? null;
     $teamId = $input['teamId'] ?? $input['team_id'] ?? null;
+    $teamLeaderId = $input['teamLeaderId'] ?? $input['team_leader_id'] ?? null;
     $agentId = $input['agentId'] ?? $input['agent_id'] ?? null;
     $now = date('c');
 
-    $pdo->prepare("UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_agent_id = ?, updated_at = ? WHERE id = ?")
-        ->execute([$officeId, $teamId, $agentId, $now, $leadId]);
+    $pdo->prepare("UPDATE leads SET assigned_office_id = ?, assigned_team_id = ?, assigned_team_leader_id = ?, assigned_agent_id = ?, updated_at = ? WHERE id = ?")
+        ->execute([$officeId, $teamId, $teamLeaderId, $agentId, $now, $leadId]);
 
     $stmtL = $pdo->prepare("SELECT * FROM leads WHERE id = ?");
     $stmtL->execute([$leadId]);

@@ -1124,7 +1124,7 @@ export async function listTeams({ includeDeleted, officeId } = {}) {
 }
 
 export async function createTeam({ officeId, name, maxSize, leaderName, leaderPassword, leaderEmail }) {
-  const body = { office_id: officeId, name };
+  const body = { office_id: officeId || null, name };
   if (maxSize        != null) body.max_size        = Number(maxSize);
   if (leaderName)             body.leader_name     = leaderName;
   if (leaderPassword)         body.leader_password = leaderPassword;
@@ -1176,19 +1176,27 @@ export async function updateStaffCapabilities(staffId, capabilities) {
   });
 }
 
-export async function createAgentApi({ teamId, name, password, email }) {
-  const body = { role: 'Agent', team_id: teamId, name, password };
+export async function createAgentApi({ teamId, officeId, name, password, email }) {
+  const body = { role: 'Agent', team_id: teamId ?? null, office_id: officeId ?? null, name, password };
   if (email) body.email = email;
   const res = await adminFetch('/api/admin/staff', { method: 'POST', body });
   return mapStaffRow(res.staff);
 }
 
-export async function updateStaffApi(id, { name, email, password, teamId }) {
+export async function createStaffApi({ role, officeId = null, teamId = null, name, password, email }) {
+  const body = { role, office_id: officeId, team_id: teamId, name, password };
+  if (email) body.email = email;
+  const res = await adminFetch('/api/admin/staff', { method: 'POST', body });
+  return mapStaffRow(res.staff);
+}
+
+export async function updateStaffApi(id, { name, email, password, teamId, officeId }) {
   const body = {};
   if (name     != null) body.name     = name;
   if (email    != null) body.email    = email;
   if (password != null) body.password = password;
-  if (teamId   != null) body.team_id  = teamId;
+  if (teamId   !== undefined) body.team_id  = teamId;
+  if (officeId !== undefined) body.office_id = officeId;
   const res = await adminFetch(`/api/admin/staff/${id}`, { method: 'PATCH', body });
   return mapStaffRow(res.staff);
 }
@@ -1237,6 +1245,7 @@ function mapLeadRow(l) {
     clientPassword:     l.client_password || '',
     assignedToOffice:   l.assigned_office_id || null,
     assignedToTeam:     l.assigned_team_id   || null,
+    assignedToTeamLeader: l.assigned_team_leader_id || null,
     assignedToAgent:    l.assigned_agent_id  || null,
     assignedAgentName:  l.assigned_agent_name || null,
     assignedBy:         l.assigned_by || null,
@@ -1382,6 +1391,7 @@ export async function createLeadApi(updates) {
   // Assignment fields go in too on create.
   if (updates.assignedToOffice !== undefined) body.assigned_office_id = updates.assignedToOffice;
   if (updates.assignedToTeam   !== undefined) body.assigned_team_id   = updates.assignedToTeam;
+  if (updates.assignedToTeamLeader !== undefined) body.assigned_team_leader_id = updates.assignedToTeamLeader;
   if (updates.assignedToAgent  !== undefined) body.assigned_agent_id  = updates.assignedToAgent;
   const res = await adminFetch('/api/admin/leads', { method: 'POST', body });
   return mapLeadRow(res.lead);
@@ -1402,11 +1412,12 @@ export async function updateLeadApi(leadId, updates) {
   return mapLeadRow(res.lead);
 }
 
-export async function assignLeadApi(leadId, { officeId, teamId, agentId } = {}) {
+export async function assignLeadApi(leadId, { officeId, teamId, teamLeaderId, agentId } = {}) {
   const body = {};
   // Pass-through nulls to clear; only omit if undefined (= keep current).
   if (officeId !== undefined) body.assigned_office_id = officeId;
   if (teamId   !== undefined) body.assigned_team_id   = teamId;
+  if (teamLeaderId !== undefined) body.assigned_team_leader_id = teamLeaderId;
   if (agentId  !== undefined) body.assigned_agent_id  = agentId;
   const res = await adminFetch(`/api/admin/leads/${leadId}/assign`, { method: 'POST', body });
   return mapLeadRow(res.lead);
@@ -1480,6 +1491,7 @@ export async function importLeadsApi(leads) {
     notes:              l.notes || '',
     assigned_office_id: l.assignedToOffice ?? l.assigned_office_id ?? null,
     assigned_team_id:   l.assignedToTeam   ?? l.assigned_team_id   ?? null,
+    assigned_team_leader_id: l.assignedToTeamLeader ?? l.assigned_team_leader_id ?? null,
     assigned_agent_id:  l.assignedToAgent  ?? l.assigned_agent_id  ?? null,
   }));
   const result = await adminFetch('/api/admin/leads/import', { method: 'POST', body: { leads: payload } });

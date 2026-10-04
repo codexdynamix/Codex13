@@ -1644,6 +1644,7 @@ export function CreateLeadModal({ scope, teamsForOffice = [], agents = [], onClo
         funnel:      funnel.trim() || null,
         assignedToOffice: scope?.officeId || null,
         assignedToTeam:   teamId || scope?.teamId || null,
+        assignedToTeamLeader: scope?.teamLeaderId || null,
         assignedToAgent:  agentId || scope?.agentId || null,
       });
     } finally {

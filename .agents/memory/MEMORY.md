@@ -2,3 +2,4 @@
 - [Imported app runtime checks](imported-app-runtime-checks.md) — verify runtime compatibility and the artifact-assigned port before retrying failed previews.
 - [Client credential encryption](client-credential-encryption.md) — the app’s saved website and mailbox passwords depend on a stable `SESSION_SECRET`; rotation requires re-entering them.
 - [Accounting search layout conflicts](accounting-search-layout-conflicts.md) — generic form label/input rules can stack compact search fields unless excluded at the source.
+- [Flexible CRM ownership](flexible-crm-ownership.md) — office/team are optional, and standalone team leaders see clients only when explicitly assigned.

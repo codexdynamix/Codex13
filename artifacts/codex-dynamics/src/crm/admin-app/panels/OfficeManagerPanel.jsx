@@ -380,14 +380,14 @@ function OfficeManagerPanel({ data, setData, currentUser, assignTeamLeader, crea
               <div>
                 <div style={{ fontSize: 12, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Assign to Team</div>
                 <select value={teamId} onChange={e => setTeamId(e.target.value)} className="crm-super-admin-select">
-                  <option value="">Select team...</option>
+                  <option value="">No team (direct to this office)</option>
                   {teamsForOffice.map(t => <option key={t.id} value={t.id}>{t.name} ({getTeamAgentCount(t.id, data.users)}/{t.maxSize})</option>)}
                 </select>
               </div>
               <div><div style={{ fontSize: 12, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Agent Name</div><input value={newAgentName} onChange={e => setNewAgentName(e.target.value)} placeholder="Agent name..." autoComplete="off" className="crm-super-admin-input" /></div>
               <div><div style={{ fontSize: 12, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Agent Password</div><input value={newAgentPassword} onChange={e => setNewAgentPassword(e.target.value)} placeholder="Password..." type="password" autoComplete="new-password" className="crm-super-admin-input" /></div>
               <button className="crm-super-admin-btn" style={{ width: '100%', justifyContent: 'center', marginTop: 4 }} disabled={!teamId || !newAgentName || !newAgentPassword} onClick={async () => {
-                const r = await createAgent(teamId, newAgentName, newAgentPassword);
+                const r = await createAgent(teamId || null, newAgentName, newAgentPassword, currentUser.officeId);
                 if (!r) return;
                 if (r.loginLink) setNewAgentLink(r.loginLink);
                 setNewAgentName(''); setNewAgentPassword('');

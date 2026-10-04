@@ -55,6 +55,7 @@ export default function LeadProfileModal({
   const [profileNotes, setProfileNotes] = useState('');
   const [reassignOfficeId, setReassignOfficeId] = useState('');
   const [reassignTeamId, setReassignTeamId] = useState('');
+  const [reassignTeamLeaderId, setReassignTeamLeaderId] = useState('');
   const [reassignAgentId, setReassignAgentId] = useState('');
 
   const [profileViewTab, setProfileViewTab] = useState('overview');
@@ -87,6 +88,7 @@ export default function LeadProfileModal({
     setProfileNotes(lead.notes || '');
     setReassignOfficeId(lead.assignedToOffice || lead.assigned_office_id || '');
     setReassignTeamId(lead.assignedToTeam || lead.assigned_team_id || '');
+    setReassignTeamLeaderId(lead.assignedToTeamLeader || lead.assigned_team_leader_id || '');
     setReassignAgentId(lead.assignedToAgent || lead.assigned_agent_id || '');
 
     const currentPwd = portalDb.getClientPassword(lead.id) || lead.clientPassword || lead.client_password || '';
@@ -308,6 +310,7 @@ export default function LeadProfileModal({
         leadId: lead.id,
         officeId: reassignOfficeId || null,
         teamId: reassignTeamId || null,
+        teamLeaderId: reassignTeamLeaderId || null,
         agentId: reassignAgentId || null,
       });
     }
@@ -347,6 +350,7 @@ export default function LeadProfileModal({
                 commentHistory: optimisticHistory,
                 assignedToOffice: reassignOfficeId || null,
                 assignedToTeam: reassignTeamId || null,
+                assignedToTeamLeader: reassignTeamLeaderId || null,
                 assignedToAgent: reassignAgentId || null,
               }
             : l
@@ -377,14 +381,14 @@ export default function LeadProfileModal({
   const unassignLead = () => {
     if (!lead) return;
     if (setLeadAssignment) {
-      setLeadAssignment({ leadId: lead.id, officeId: null, teamId: null, agentId: null });
+      setLeadAssignment({ leadId: lead.id, officeId: null, teamId: null, teamLeaderId: null, agentId: null });
     }
     if (setData) {
       setData((prev) => ({
         ...prev,
         leads: (prev.leads || []).map((l) =>
           l.id === lead.id
-            ? { ...l, assignedToOffice: null, assignedToTeam: null, assignedToAgent: null }
+            ? { ...l, assignedToOffice: null, assignedToTeam: null, assignedToTeamLeader: null, assignedToAgent: null }
             : l
         ),
       }));
@@ -1428,6 +1432,18 @@ export default function LeadProfileModal({
                       </optgroup>
                     );
                   })}
+                  {(() => {
+                    const independentAgents = (data.users || []).filter(
+                      (u) => u.role === ROLE.AGENT && !u.officeId
+                    );
+                    return independentAgents.length ? (
+                      <optgroup label="Independent agents">
+                        {independentAgents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>{agent.name}</option>
+                        ))}
+                      </optgroup>
+                    ) : null;
+                  })()}
                 </select>
               </div>
 
@@ -1464,10 +1480,12 @@ export default function LeadProfileModal({
                       style={{ width: '100%' }}
                       value={reassignTeamId}
                       onChange={(e) => {
-                        setReassignTeamId(e.target.value);
+                        const nextTeamId = e.target.value;
+                        setReassignTeamId(nextTeamId);
                         setReassignAgentId('');
+                        const nextTeam = (data.teams || []).find((team) => team.id === nextTeamId);
+                        if (nextTeamId && nextTeam) setReassignOfficeId(nextTeam.officeId || '');
                       }}
-                      disabled={!reassignOfficeId}
                     >
                       <option value="">None</option>
                       {(data.teams || [])
@@ -1481,6 +1499,33 @@ export default function LeadProfileModal({
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {isSuperAdmin && data?.users && (
+            <div style={{ background: 'var(--crm-card)', borderRadius: 8, padding: 16, marginBottom: 20 }}>
+              <label htmlFor="lead-team-leader-owner" style={{ display: 'block', fontSize: 11, color: 'var(--crm-text-secondary)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 8 }}>
+                Direct Team Leader
+              </label>
+              <p style={{ fontSize: 11, color: 'var(--crm-text-secondary)', margin: '0 0 8px' }}>
+                Assign the client directly to a team leader, even when there is no team or agent.
+              </p>
+              <select
+                id="lead-team-leader-owner"
+                className="crm-super-admin-select"
+                style={{ width: '100%' }}
+                value={reassignTeamLeaderId}
+                onChange={(e) => setReassignTeamLeaderId(e.target.value)}
+              >
+                <option value="">No direct team leader</option>
+                {(data.users || [])
+                  .filter((user) => user.role === ROLE.TEAM_LEADER)
+                  .map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}{user.teamId ? ` — ${(data.teams || []).find((team) => team.id === user.teamId)?.name || 'team leader'}` : ' — standalone'}
+                    </option>
+                  ))}
+              </select>
             </div>
           )}
 
