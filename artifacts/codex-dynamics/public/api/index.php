@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/lead-access.php';
+require_once __DIR__ . '/hostinger-mail.php';
 
 $pdo = getDb();
 $method = $_SERVER['REQUEST_METHOD'];
@@ -815,6 +816,8 @@ if (($apiPath === '/portal/data'
     || $apiPath === '/portal/access'
     || $apiPath === '/portal/mail'
     || $apiPath === '/portal/mail/reply'
+    || $apiPath === '/portal/mailboxes'
+    || str_starts_with($apiPath, '/portal/mailboxes/')
     || $apiPath === '/portal/messages/presence'
     || $apiPath === '/portal/logout'
     || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
@@ -833,6 +836,10 @@ if (($apiPath === '/portal/data'
         && $apiPath !== '/portal/logout') {
         jsonResponse(['ok' => false, 'error' => 'Client impersonation is read-only.'], 403);
     }
+}
+
+if (hostingerMailDispatch($pdo, $apiPath, $method, $input, $adminSession, $portalSession)) {
+    exit;
 }
 
 if ($apiPath === '/healthz') {

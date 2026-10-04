@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import './SiteSettings.css';
+import { HostingerMailSettings } from '../HostingerMailAdmin.jsx';
 import {
   DEFAULT_PLATFORM_SETTINGS,
   usePlatformSettings,
@@ -14,6 +15,7 @@ import {
   Layout,
   Search,
   Shield,
+  Mail,
   Save,
   RotateCcw,
   Check,
@@ -220,6 +222,7 @@ const SUB_TABS = [
   { id: 'socials', label: 'Header Socials', icon: Share2 },
   { id: 'seo', label: 'SEO & Search', icon: Search },
   { id: 'security', label: 'Security & System', icon: Shield },
+  { id: 'hostinger-mail', label: 'Hostinger Mail', icon: Mail },
 ];
 
 const RADIUS_OPTIONS = [
@@ -1550,6 +1553,8 @@ export default function SiteSettingsTab({ showNotification = () => {} }) {
           );
         })}
       </nav>
+
+      {activeSubTab === 'hostinger-mail' && <HostingerMailSettings />}
 
       {/* ── 2. Contact Channels ────────────────────────────────── */}
       {activeSubTab === 'contacts' && (

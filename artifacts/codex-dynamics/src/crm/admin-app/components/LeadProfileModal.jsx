@@ -18,6 +18,7 @@ import {
   markAdminMessagesRead,
 } from '../adminApi.js';
 import { useConfirmDialog } from './ConfirmModal/ConfirmModal.jsx';
+import { ClientEmailAccounts } from './HostingerMailAdmin.jsx';
 
 function formatRelativeTime(dateString) {
   if (!dateString) return 'Just now';
@@ -638,6 +639,7 @@ export default function LeadProfileModal({
               { id: 'security', label: '🔒 Client Security', color: '#FF453A' },
               { id: 'chat', label: `💬 Client Support ${chatMessages.length ? `(${chatMessages.length})` : ''}`, color: '#30D158' },
               { id: 'activity', label: '📊 Client Activity', color: '#0A84FF' },
+              ...(isSuperAdmin ? [{ id: 'mailboxes', label: 'Email Accounts', color: '#557894' }] : []),
             ].map((tab) => {
               const isActive = profileViewTab === tab.id;
               return (
@@ -663,6 +665,10 @@ export default function LeadProfileModal({
               );
             })}
           </div>
+
+          {isSuperAdmin && profileViewTab === 'mailboxes' && (
+            <ClientEmailAccounts client={lead} clients={data?.leads || []} />
+          )}
 
           {/* TAB 1: LEAD SECURITY */}
           {profileViewTab === 'security' && (

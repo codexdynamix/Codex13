@@ -561,6 +561,18 @@ async function adminFetch(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// Hostinger Mail CRM integration. Tokens are submitted transiently and never persisted client-side.
+export async function getHostingerMailIntegrationAdmin() { return adminFetch('/api/admin/integrations/hostinger-mail'); }
+export async function saveHostingerMailIntegrationAdmin(token) { return adminFetch('/api/admin/integrations/hostinger-mail', { method: 'POST', body: { token } }); }
+export async function testHostingerMailIntegrationAdmin(token) { return adminFetch('/api/admin/integrations/hostinger-mail/test', { method: 'POST', body: token ? { token } : {} }); }
+export async function removeHostingerMailIntegrationAdmin() { return adminFetch('/api/admin/integrations/hostinger-mail', { method: 'DELETE' }); }
+export async function listHostingerMailboxesAdmin() { const d = await adminFetch('/api/admin/hostinger/mailboxes'); return d.mailboxes || []; }
+export async function getClientMailboxesAdmin(clientId) { const d = await adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes`); return d.mailboxes || d.assignments || []; }
+export async function assignClientMailboxAdmin(clientId, payload) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes`, { method: 'POST', body: payload }); }
+export async function updateClientMailboxAdmin(clientId, assignmentId, payload) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', body: payload }); }
+export async function removeClientMailboxAdmin(clientId, assignmentId) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' }); }
+export async function reassignClientMailboxAdmin(assignmentId, targetClientId, displayName) { return adminFetch(`/api/admin/client-mailboxes/${encodeURIComponent(assignmentId)}/reassign`, { method: 'POST', body: { targetClientId, ...(displayName ? { displayName } : {}) } }); }
+
 export async function getClientWorkspaceAdmin(userId) {
   const data = await adminFetch(`/api/admin/client-workspaces/${encodeURIComponent(userId)}`);
   return data?.workspace || null;

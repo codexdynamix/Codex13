@@ -506,6 +506,59 @@ function initSchema(PDO $pdo): void {
         );
     ");
 
+    // Global Hostinger Mail API credential and normalized client mailbox
+    // assignments. The token value is always encrypted by the API layer.
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS hostinger_mail_integrations (
+            id VARCHAR(64) PRIMARY KEY,
+            encrypted_token TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'connected',
+            last_tested_at VARCHAR(40),
+            last_success_at VARCHAR(40),
+            last_error_code VARCHAR(128),
+            mailbox_count INTEGER NOT NULL DEFAULT 0,
+            order_resource_id VARCHAR(191),
+            created_by VARCHAR(191),
+            updated_by VARCHAR(191),
+            created_at VARCHAR(40) NOT NULL,
+            updated_at VARCHAR(40) NOT NULL
+        );
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_mailboxes (
+            id VARCHAR(191) PRIMARY KEY,
+            client_id VARCHAR(191) NOT NULL,
+            provider VARCHAR(32) NOT NULL DEFAULT 'hostinger',
+            provider_mailbox_id VARCHAR(191) NOT NULL UNIQUE,
+            email_address VARCHAR(320) NOT NULL,
+            display_name VARCHAR(191) NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'enabled',
+            created_by VARCHAR(191),
+            created_at VARCHAR(40) NOT NULL,
+            updated_at VARCHAR(40) NOT NULL
+        );
+    ");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_mail_drafts (
+            id VARCHAR(191) PRIMARY KEY,
+            client_id VARCHAR(191) NOT NULL,
+            provider_mailbox_id VARCHAR(191) NOT NULL,
+            draft_json MEDIUMTEXT NOT NULL,
+            created_at VARCHAR(40) NOT NULL,
+            updated_at VARCHAR(40) NOT NULL
+        );
+    ");
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_client_mailboxes_client_status ON client_mailboxes (client_id, status)');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_client_mail_drafts_owner_mailbox ON client_mail_drafts (client_id, provider_mailbox_id, updated_at)');
+    } else {
+        $mailboxIndex = $pdo->query("SHOW INDEX FROM client_mailboxes WHERE Key_name = 'idx_client_mailboxes_client_status'")->fetch();
+        if (!$mailboxIndex) $pdo->exec('CREATE INDEX idx_client_mailboxes_client_status ON client_mailboxes (client_id, status)');
+        $draftIndex = $pdo->query("SHOW INDEX FROM client_mail_drafts WHERE Key_name = 'idx_client_mail_drafts_owner_mailbox'")->fetch();
+        if (!$draftIndex) $pdo->exec('CREATE INDEX idx_client_mail_drafts_owner_mailbox ON client_mail_drafts (client_id, provider_mailbox_id, updated_at)');
+    }
+
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS client_profile_permissions (
             client_id VARCHAR(191) NOT NULL,
