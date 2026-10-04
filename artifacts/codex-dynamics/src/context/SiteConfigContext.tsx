@@ -131,6 +131,23 @@ export function SiteConfigProvider({ children }: { children: React.ReactNode }) 
             localStorage.getItem("codex_live_preview_config")
           : null;
 
+        if (!liveRaw) {
+          const response = await fetch("/api/crm/settings", {
+            headers: { Accept: "application/json" },
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data?.ok === false) {
+            throw new Error(data?.error || `Site settings request failed (${response.status}).`);
+          }
+          if (data.site_config) {
+            setConfig((prev) => safeMergeConfig(prev || DEFAULT_SITE_CONFIG, data.site_config));
+            localStorage.setItem("codex_site_config", JSON.stringify(data.site_config));
+          } else {
+            setConfig(DEFAULT_SITE_CONFIG);
+          }
+          return;
+        }
+
         const raw = liveRaw || localStorage.getItem("codex_site_config");
         if (raw) {
           const parsed = JSON.parse(raw);
@@ -166,7 +183,19 @@ export function SiteConfigProvider({ children }: { children: React.ReactNode }) 
       }
     };
 
+    const handleConfigUpdate = (e: Event) => {
+      const config = (e as CustomEvent).detail;
+      if (config?.reset === true) {
+        setConfig(DEFAULT_SITE_CONFIG);
+        return;
+      }
+      if (config && typeof config === "object") {
+        setConfig((prev) => safeMergeConfig(prev || DEFAULT_SITE_CONFIG, config));
+      }
+    };
+
     window.addEventListener("message", handleMessage);
+    window.addEventListener("codex_config_updated", handleConfigUpdate);
 
     if (typeof window !== "undefined" && window.self !== window.top) {
       window.parent.postMessage({ type: "CODEX_PREVIEW_READY" }, "*");
@@ -174,6 +203,7 @@ export function SiteConfigProvider({ children }: { children: React.ReactNode }) 
 
     return () => {
       window.removeEventListener("message", handleMessage);
+      window.removeEventListener("codex_config_updated", handleConfigUpdate);
     };
   }, [fetchConfig]);
 

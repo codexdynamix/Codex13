@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { SiteColors, SiteConfig, ThemeSettings } from "@/types/site-editor";
+import { saveSiteConfigToApi } from "../crm/platformDefaults";
 
 export const DEFAULT_THEME_ID = "codex-pro";
 
@@ -289,16 +290,6 @@ export function hrefToPreviewPage(href: string): PreviewPage {
 }
 
 export async function persistSiteConfig(config: SiteConfig) {
-  const res = await fetch("/api/crm/action", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action: "save_site_content",
-      payload: { config },
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Could not save site config (${res.status})`);
-  }
-  return res.json().catch(() => ({}));
+  const siteConfig = await saveSiteConfigToApi(config);
+  return { ok: true, site_config: siteConfig };
 }

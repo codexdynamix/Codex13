@@ -268,7 +268,7 @@ function RolePage({ data, dataLoading, role, setLeadAssignment, assignOfficeMana
           <Routes>
             <Route
               path="lead/:leadId"
-              element={<LeadProfilePage role={role} viewingUser={user} data={data} updateLead={updateLead} showNotification={showNotification} />}
+              element={<LeadProfilePage role={role} viewingUser={user} data={data} setData={setData} updateLead={updateLead} showNotification={showNotification} />}
             />
             <Route
               path="staff/:staffId"

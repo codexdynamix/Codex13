@@ -9,7 +9,7 @@ import {
 } from '../shared';
 import { useConfirmDialog } from '../components/ConfirmModal/ConfirmModal';
 import { SearchAutocomplete } from '../components/UserChrome.jsx';
-import { searchAdminLeads } from '../adminApi';
+import { searchAdminLeads, createUserAppointment } from '../adminApi';
 import { getAdminMessages, sendAdminMessage, markAdminMessagesRead, getAdminUnreadMessageCounts, deleteAdminMessage, clearAdminChat, adminSetClientPassword, deleteLeadCommentApi, deleteLeadStatusEntryApi, getLeadNotificationsAsAdmin, fetchLeadById, postAdminPresence, getAdminMessageAttachmentUrl, getStaffCapabilities, fetchAdminMe, updateLeadApi, getClientProfilePermissionsAdmin } from '../adminApi';
 import AdminNotificationsInbox from '../components/AdminNotificationsInbox/AdminNotificationsInbox.jsx';
 import ReactCapabilityWorkspace from '../components/ReactCapabilityWorkspace.jsx';
@@ -592,7 +592,7 @@ function AgentPanel({ data, currentUser, setData, setUserLoginState, createLead,
   );
 }
 
-function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification }) {
+function LeadProfilePage({ role, viewingUser, data, setData, updateLead, showNotification }) {
   const { leadId } = useParams();
   const currentUser = viewingUser;
   const isSuperAdmin = currentUser?.role === ROLE.SUPER_ADMIN;
@@ -622,6 +622,7 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
   const [appointmentTime, setAppointmentTime] = useState('');
   const [appointmentTitle, setAppointmentTitle] = useState('');
   const [appointmentNotes, setAppointmentNotes] = useState('');
+  const [appointmentSaving, setAppointmentSaving] = useState(false);
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
   const [showSecurityModal, setShowSecurityModal] = useState(false);
   const [liveClientPassword, setLiveClientPassword] = useState(lead?.clientPassword || '');
@@ -945,27 +946,40 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
     }
   };
 
-  const handleAddAppointment = () => {
+  const handleAddAppointment = async () => {
     if (!appointmentDate || !appointmentTime || !appointmentTitle.trim()) {
       showNotification('Date, time, and title are required to create appointment.');
       return;
     }
-    const newAppointment = {
-      id: `${Date.now()}`,
-      date: appointmentDate,
-      time: appointmentTime,
-      title: appointmentTitle.trim(),
-      notes: appointmentNotes.trim() || 'No additional notes',
-      createdBy: currentUser?.name || 'Agent',
-    };
-    const nextAppointments = [...(lead.appointments || []), newAppointment].slice(-50);
-    updateLead(lead.id, { appointments: nextAppointments });
-    showNotification('Appointment scheduled successfully.');
-    setAppointmentDate('');
-    setAppointmentTime('');
-    setAppointmentTitle('');
-    setAppointmentNotes('');
-    setShowAppointmentModal(false);
+    setAppointmentSaving(true);
+    try {
+      const appointment = await createUserAppointment(lead.id, {
+        title: appointmentTitle.trim(),
+        date: appointmentDate,
+        time: appointmentTime,
+        notes: appointmentNotes.trim() || 'No additional notes',
+        type: 'call',
+      });
+      if (!appointment?.id) throw new Error('The server did not return the saved appointment.');
+      setData((previous) => ({
+        ...previous,
+        leads: previous.leads.map((item) =>
+          item.id === lead.id
+            ? { ...item, appointments: [...(item.appointments || []), appointment] }
+            : item
+        ),
+      }));
+      showNotification('Appointment scheduled successfully.');
+      setAppointmentDate('');
+      setAppointmentTime('');
+      setAppointmentTitle('');
+      setAppointmentNotes('');
+      setShowAppointmentModal(false);
+    } catch (error) {
+      showNotification(error?.message || 'Failed to save appointment.');
+    } finally {
+      setAppointmentSaving(false);
+    }
   };
 
   const commentHistory = (lead.commentHistory || []).filter(
@@ -1315,7 +1329,7 @@ function LeadProfilePage({ role, viewingUser, data, updateLead, showNotification
               <textarea className="crm-input" rows={4} value={appointmentNotes} placeholder="Optional notes" onChange={(e) => setAppointmentNotes(e.target.value)} />
             </div>
             <div className="crm-comment-input-actions" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-              <button className="crm-post-comment-btn" onClick={handleAddAppointment} disabled={!appointmentDate || !appointmentTime || !appointmentTitle.trim()}>Save Appointment</button>
+              <button className="crm-post-comment-btn" onClick={handleAddAppointment} disabled={appointmentSaving || !appointmentDate || !appointmentTime || !appointmentTitle.trim()}>{appointmentSaving ? 'Saving…' : 'Save Appointment'}</button>
             </div>
           </div>
         </div>

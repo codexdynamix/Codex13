@@ -2626,7 +2626,10 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
   };
 
   useEffect(() => {
-    fetchAdminSettings(getAdminToken()).catch(() => {});
+    fetchAdminSettings(getAdminToken()).catch((error) => {
+      console.error('[SuperAdminPanel] Failed to load saved platform settings:', error);
+      showNotification(error?.message || 'Could not load saved platform settings.');
+    });
   }, []);
 
   const dataContextValue = {

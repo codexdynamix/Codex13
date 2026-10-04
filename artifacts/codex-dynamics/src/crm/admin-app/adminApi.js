@@ -1675,10 +1675,10 @@ export async function listUserAppointments(userId) {
  * POST /api/admin/users/{id}/appointments
  * Creates an appointment on behalf of a client.
  */
-export async function createUserAppointment(userId, { title, date, notes = '', type = 'call' }) {
+export async function createUserAppointment(userId, { title, date, time = '', notes = '', type = 'call' }) {
   const data = await adminFetch(
     `/api/admin/users/${encodeURIComponent(userId)}/appointments`,
-    { method: 'POST', body: { title, date, notes, type } }
+    { method: 'POST', body: { title, date, time, notes, type } }
   );
   return data?.appointment ?? null;
 }

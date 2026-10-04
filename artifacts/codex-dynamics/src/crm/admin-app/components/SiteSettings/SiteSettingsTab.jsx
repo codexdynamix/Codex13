@@ -3,8 +3,9 @@ import './SiteSettings.css';
 import {
   DEFAULT_PLATFORM_SETTINGS,
   usePlatformSettings,
-  updateLocalSettingsState,
-  saveSettingsToApi
+  saveSettingsToApi,
+  fetchSiteConfigFromBackend,
+  sanitizePublicSiteConfig,
 } from '../../../platformDefaults';
 import {
   Palette,
@@ -530,6 +531,62 @@ export default function SiteSettingsTab({ showNotification = () => {} }) {
       }
     };
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSiteConfigFromBackend({ admin: true })
+      .then((storedConfig) => {
+        if (cancelled || !storedConfig) return;
+        setSiteConfig((previous) => ({
+          ...previous,
+          siteName: storedConfig.siteName ?? previous.siteName,
+          copyrightYear: storedConfig.copyrightYear ?? previous.copyrightYear,
+          supportEmail: storedConfig.supportEmail ?? previous.supportEmail,
+          formSubmitEmail: storedConfig.formSubmitEmail ?? previous.formSubmitEmail,
+          baseCurrency: storedConfig.baseCurrency ?? previous.baseCurrency,
+          heroTitle: storedConfig.hero?.title ?? previous.heroTitle,
+          heroSubtitle: storedConfig.hero?.subtitle ?? previous.heroSubtitle,
+          heroBadge: storedConfig.hero?.badge ?? previous.heroBadge,
+          activeTheme: storedConfig.theme?.activeTheme ?? previous.activeTheme,
+          primaryColor: storedConfig.colors?.primary ?? previous.primaryColor,
+          secondaryColor: storedConfig.colors?.secondary ?? previous.secondaryColor,
+          accentColor: storedConfig.colors?.accent ?? previous.accentColor,
+          backgroundColor: storedConfig.colors?.background ?? previous.backgroundColor,
+          cardBg: storedConfig.colors?.cardBg ?? previous.cardBg,
+          borderRadius: storedConfig.theme?.borderRadius ?? previous.borderRadius,
+          fontFamily: storedConfig.theme?.fontFamily ?? previous.fontFamily,
+          headerStyle: storedConfig.theme?.headerStyle ?? previous.headerStyle,
+          heroLayout: storedConfig.theme?.heroLayout ?? previous.heroLayout,
+          cardStyle: storedConfig.theme?.cardStyle ?? previous.cardStyle,
+          socialContacts: Array.isArray(storedConfig.socialContacts)
+            ? storedConfig.socialContacts
+            : previous.socialContacts,
+          addresses: Array.isArray(storedConfig.addresses) ? storedConfig.addresses : previous.addresses,
+          headerSocials: storedConfig.headerSocials ?? previous.headerSocials,
+          sectionsOrder: storedConfig.theme?.sectionsOrder ?? previous.sectionsOrder,
+          sectionsVisibility: storedConfig.theme?.sectionsVisibility ?? previous.sectionsVisibility,
+          whatsappDock: storedConfig.whatsapp
+            ? { ...previous.whatsappDock, ...storedConfig.whatsapp }
+            : previous.whatsappDock,
+          tidioChat: storedConfig.tidio
+            ? { ...previous.tidioChat, ...storedConfig.tidio }
+            : previous.tidioChat,
+          seo: storedConfig.seo ? { ...previous.seo, ...storedConfig.seo } : previous.seo,
+          security: {
+            ...previous.security,
+            ...(storedConfig.security || {}),
+            webhookUrl: storedConfig.webhookUrl ?? storedConfig.security?.webhookUrl ?? previous.security.webhookUrl,
+          },
+        }));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('[SiteSettingsTab] Failed to load saved site settings:', error);
+          showNotification(`Could not load saved site settings: ${error.message}`);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const fileInputRef = useRef(null);
 
@@ -1277,10 +1334,6 @@ export default function SiteSettingsTab({ showNotification = () => {} }) {
         webhookUrl: siteConfig.security.webhookUrl
       };
 
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('codex_site_config', JSON.stringify(fullConfig));
-      }
-
       const newPlatformSettings = {
         platformName: siteConfig.siteName,
         platformYear: siteConfig.copyrightYear,
@@ -1301,20 +1354,14 @@ export default function SiteSettingsTab({ showNotification = () => {} }) {
         backgroundColor: siteConfig.backgroundColor
       };
 
-      updateLocalSettingsState(newPlatformSettings);
-      await saveSettingsToApi(newPlatformSettings).catch(() => {});
-
-      await fetch('/api/crm/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'save_site_content',
-          payload: { config: fullConfig }
-        })
-      }).catch(() => {});
+      await saveSettingsToApi(newPlatformSettings, undefined, fullConfig);
+      const publicConfig = sanitizePublicSiteConfig(fullConfig);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('codex_site_config', JSON.stringify(publicConfig));
+      }
 
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('codex_config_updated', { detail: fullConfig }));
+        window.dispatchEvent(new CustomEvent('codex_config_updated', { detail: publicConfig }));
       }
 
       setHasUnsavedChanges(false);

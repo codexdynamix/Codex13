@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "npm run dev --workspace=@workspace/codex-dynamics",
     "build": "npm run build --workspace=@workspace/codex-dynamics",
+    "test:api": "node --test scripts/admin-api.integration.test.mjs",
     "lint": "echo 'No lint issues'"
   },
   "overrides": {

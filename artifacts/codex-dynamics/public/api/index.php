@@ -114,6 +114,74 @@ function requireSuperAdmin(PDO $pdo, ?array $session): void {
     if ($staff['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can perform this action.'], 403);
 }
 
+function readPlatformSettingsRecord(PDO $pdo): array {
+    $stmt = $pdo->prepare("SELECT settings_json, site_config_json, updated_at FROM platform_settings WHERE id = 'global'");
+    $stmt->execute();
+    $row = $stmt->fetch();
+    if (!$row) {
+        return ['settings' => [], 'site_config' => null, 'updated_at' => null];
+    }
+
+    $settings = json_decode((string)($row['settings_json'] ?? '{}'), true);
+    $siteConfig = !empty($row['site_config_json'])
+        ? json_decode((string)$row['site_config_json'], true)
+        : null;
+    return [
+        'settings' => is_array($settings) ? $settings : [],
+        'site_config' => is_array($siteConfig) ? $siteConfig : null,
+        'updated_at' => $row['updated_at'] ?? null,
+    ];
+}
+
+function publicSiteConfig(?array $siteConfig): ?array {
+    if ($siteConfig === null) return null;
+    if (isset($siteConfig['security']) && is_array($siteConfig['security'])) {
+        unset($siteConfig['security']['webhookUrl'], $siteConfig['security']['webhook_url']);
+    }
+    unset($siteConfig['webhookUrl'], $siteConfig['webhook_url']);
+    return $siteConfig;
+}
+
+function savePlatformSettingsRecord(
+    PDO $pdo,
+    array $settings,
+    ?array $siteConfig,
+    ?string $actorId,
+    bool $siteConfigProvided = true
+): array {
+    $current = readPlatformSettingsRecord($pdo);
+    $nextSettings = array_merge($current['settings'], $settings);
+    $nextSiteConfig = $siteConfigProvided ? $siteConfig : $current['site_config'];
+    $settingsJson = json_encode($nextSettings, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $siteConfigJson = $nextSiteConfig === null
+        ? null
+        : json_encode($nextSiteConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    if ($settingsJson === false || ($nextSiteConfig !== null && $siteConfigJson === false)) {
+        throw new RuntimeException('Settings could not be encoded.');
+    }
+    if (strlen($settingsJson) + strlen((string)$siteConfigJson) > 1_000_000) {
+        throw new LengthException('Settings payload is too large.');
+    }
+
+    $exists = $pdo->query("SELECT id FROM platform_settings WHERE id = 'global'")->fetchColumn();
+    if ($exists) {
+        $stmt = $pdo->prepare("
+            UPDATE platform_settings
+            SET settings_json = ?, site_config_json = ?, updated_by = ?, updated_at = ?
+            WHERE id = 'global'
+        ");
+        $stmt->execute([$settingsJson, $siteConfigJson, $actorId, date('c')]);
+    } else {
+        $stmt = $pdo->prepare("
+            INSERT INTO platform_settings (id, settings_json, site_config_json, updated_by, updated_at)
+            VALUES ('global', ?, ?, ?, ?)
+        ");
+        $stmt->execute([$settingsJson, $siteConfigJson, $actorId, date('c')]);
+    }
+    return readPlatformSettingsRecord($pdo);
+}
+
 function optionalId(mixed $value): ?string {
     $value = trim((string)($value ?? ''));
     return $value === '' ? null : $value;
@@ -1436,11 +1504,38 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
     }
 }
 
+if ($apiPath === '/crm/settings') {
+    if ($method !== 'GET') {
+        jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    }
+    $record = readPlatformSettingsRecord($pdo);
+    jsonResponse([
+        'ok' => true,
+        'settings' => $record['settings'],
+        'site_config' => publicSiteConfig($record['site_config']),
+    ]);
+}
+
 // -----------------------------------------------------------------------------
 // 3. CRM ACTIONS (Blog save/toggle, Project save/toggle/hide, Image uploads)
 // -----------------------------------------------------------------------------
 if ($apiPath === '/crm/action') {
     $action = $input['action'] ?? '';
+
+    if ($action === 'save_site_content') {
+        $contentAdmin = findSession($pdo, 'admin_sessions', 'user_id');
+        requireSuperAdmin($pdo, $contentAdmin);
+        $siteConfig = $input['payload']['config'] ?? $input['site_config'] ?? null;
+        if (!is_array($siteConfig)) {
+            jsonResponse(['ok' => false, 'error' => 'A site configuration object is required.'], 400);
+        }
+        try {
+            $record = savePlatformSettingsRecord($pdo, [], $siteConfig, (string)$contentAdmin['id']);
+        } catch (LengthException $error) {
+            jsonResponse(['ok' => false, 'error' => $error->getMessage()], 413);
+        }
+        jsonResponse(['ok' => true, 'site_config' => $record['site_config']]);
+    }
 
     // Upload picture
     if ($action === 'upload_image') {
@@ -1531,12 +1626,160 @@ if ($apiPath === '/crm/action') {
         jsonResponse(['ok' => true]);
     }
 
-    jsonResponse(['ok' => true]);
+    jsonResponse(['ok' => false, 'error' => 'Unknown CRM action.'], 400);
 }
 
 // -----------------------------------------------------------------------------
 // 4. ADMIN: CLIENT SEARCH (Fast suggestions while typing)
 // -----------------------------------------------------------------------------
+if ($apiPath === '/admin/settings') {
+    requireSuperAdmin($pdo, $adminSession);
+
+    if ($method === 'GET') {
+        $record = readPlatformSettingsRecord($pdo);
+        jsonResponse(['ok' => true, ...$record]);
+    }
+    if ($method !== 'PUT') {
+        jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    }
+
+    $hasSettings = array_key_exists('settings', $input);
+    $hasSiteConfig = array_key_exists('site_config', $input);
+    if (!$hasSettings && !$hasSiteConfig) {
+        jsonResponse(['ok' => false, 'error' => 'Provide settings or site_config to update.'], 400);
+    }
+
+    $settings = $input['settings'] ?? [];
+    if (!is_array($settings)) {
+        jsonResponse(['ok' => false, 'error' => 'Settings must be an object.'], 400);
+    }
+    $allowedSettings = [
+        'platformName', 'platformAbbreviation', 'platformYear',
+        'platformPhone', 'platformAddress', 'supportEmail',
+        'heroHeader', 'heroStatement', 'baseCurrency',
+        'registrationEnabled', 'twoFactorAuthEnabled',
+        'sessionTimeoutMinutes', 'maxFailedLoginAttempts',
+        'primaryColor', 'secondaryColor', 'accentColor',
+        'buttonColor', 'backgroundColor', 'textColor', 'customThemes',
+    ];
+    foreach ($settings as $key => $value) {
+        if (!in_array($key, $allowedSettings, true)) {
+            jsonResponse(['ok' => false, 'error' => "Unsupported platform setting: {$key}"], 400);
+        }
+        if (in_array($key, ['registrationEnabled', 'twoFactorAuthEnabled'], true) && !is_bool($value)) {
+            jsonResponse(['ok' => false, 'error' => "{$key} must be a boolean."], 400);
+        }
+        if ($key === 'sessionTimeoutMinutes' && (!is_numeric($value) || (int)$value < 1 || (int)$value > 1440)) {
+            jsonResponse(['ok' => false, 'error' => 'Session timeout must be between 1 and 1440 minutes.'], 400);
+        }
+        if ($key === 'maxFailedLoginAttempts' && (!is_numeric($value) || (int)$value < 1 || (int)$value > 20)) {
+            jsonResponse(['ok' => false, 'error' => 'Failed login attempts must be between 1 and 20.'], 400);
+        }
+        if ($key === 'customThemes' && !is_array($value)) {
+            jsonResponse(['ok' => false, 'error' => 'Custom themes must be an array.'], 400);
+        }
+        if (!in_array($key, [
+            'registrationEnabled', 'twoFactorAuthEnabled',
+            'sessionTimeoutMinutes', 'maxFailedLoginAttempts', 'customThemes',
+        ], true) && (!is_string($value) || strlen($value) > 10000)) {
+            jsonResponse(['ok' => false, 'error' => "{$key} must be a string under 10,000 characters."], 400);
+        }
+    }
+
+    $siteConfig = $input['site_config'] ?? null;
+    if ($hasSiteConfig && $siteConfig !== null && !is_array($siteConfig)) {
+        jsonResponse(['ok' => false, 'error' => 'Site configuration must be an object or null.'], 400);
+    }
+    try {
+        $record = savePlatformSettingsRecord(
+            $pdo,
+            $settings,
+            $siteConfig,
+            (string)$adminSession['id'],
+            $hasSiteConfig
+        );
+    } catch (LengthException $error) {
+        jsonResponse(['ok' => false, 'error' => $error->getMessage()], 413);
+    }
+    jsonResponse(['ok' => true, ...$record]);
+}
+
+if (preg_match('#^/admin/users/([^/]+)/appointments$#', $apiPath, $appointmentMatch)
+    && in_array($method, ['GET', 'POST'], true)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $scope = buildAdminLeadScope(
+        (string)$actor['role'],
+        $actor['office_id'] !== null ? (string)$actor['office_id'] : null,
+        $actor['team_id'] !== null ? (string)$actor['team_id'] : null,
+        (string)$adminSession['id']
+    );
+    if ($scope === null) {
+        jsonResponse(['ok' => false, 'error' => 'This account cannot access CRM leads.'], 403);
+    }
+
+    $userId = rawurldecode($appointmentMatch[1]);
+    [$scopeSql, $scopeParams] = $scope;
+    $sql = 'SELECT l.* FROM leads l WHERE l.id = ?';
+    if ($scopeSql !== '') $sql .= " AND ({$scopeSql})";
+    $leadStmt = $pdo->prepare($sql);
+    $leadStmt->execute(array_merge([$userId], $scopeParams));
+    $lead = $leadStmt->fetch();
+    if (!$lead) {
+        jsonResponse(['ok' => false, 'error' => 'Client not found or unavailable.'], 404);
+    }
+
+    $appointments = json_decode((string)($lead['appointments'] ?? '[]'), true);
+    if (!is_array($appointments)) {
+        jsonResponse(['ok' => false, 'error' => 'Stored appointment data is invalid.'], 500);
+    }
+    if ($method === 'GET') {
+        jsonResponse(['ok' => true, 'appointments' => $appointments]);
+    }
+
+    $title = trim((string)($input['title'] ?? ''));
+    $date = trim((string)($input['date'] ?? ''));
+    $time = trim((string)($input['time'] ?? ''));
+    $notes = trim((string)($input['notes'] ?? ''));
+    $type = trim((string)($input['type'] ?? 'call')) ?: 'call';
+    if ($title === '' || strlen($title) > 200) {
+        jsonResponse(['ok' => false, 'error' => 'Appointment title is required and must be under 200 characters.'], 400);
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)
+        || !checkdate((int)substr($date, 5, 2), (int)substr($date, 8, 2), (int)substr($date, 0, 4))) {
+        jsonResponse(['ok' => false, 'error' => 'Appointment date must be a valid YYYY-MM-DD date.'], 400);
+    }
+    if ($time !== '' && (!preg_match('/^\d{2}:\d{2}$/', $time)
+        || (int)substr($time, 0, 2) > 23 || (int)substr($time, 3, 2) > 59)) {
+        jsonResponse(['ok' => false, 'error' => 'Appointment time must use HH:MM format.'], 400);
+    }
+    if (strlen($notes) > 5000 || strlen($type) > 40) {
+        jsonResponse(['ok' => false, 'error' => 'Appointment notes or type is too long.'], 400);
+    }
+    if (count($appointments) >= 50) {
+        jsonResponse(['ok' => false, 'error' => 'This client already has 50 appointments. Remove one before adding another.'], 409);
+    }
+
+    $appointment = [
+        'id' => 'appt_' . bin2hex(random_bytes(8)),
+        'date' => $date,
+        'time' => $time,
+        'title' => $title,
+        'notes' => $notes,
+        'type' => $type,
+        'createdBy' => $actor['name'],
+        'createdAt' => date('c'),
+        'status' => 'scheduled',
+    ];
+    $appointments[] = $appointment;
+    $updateStmt = $pdo->prepare('UPDATE leads SET appointments = ?, updated_at = ? WHERE id = ?');
+    $updateStmt->execute([
+        json_encode($appointments, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        date('c'),
+        $userId,
+    ]);
+    jsonResponse(['ok' => true, 'appointment' => $appointment, 'appointments' => $appointments]);
+}
+
 if ($apiPath === '/admin/users') {
     $search = trim($_GET['search'] ?? '');
     $limit = min(200, max(1, (int)($_GET['limit'] ?? 50)));

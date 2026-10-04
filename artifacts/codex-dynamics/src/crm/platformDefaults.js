@@ -56,6 +56,19 @@ export const mergePlatformSettings = (overrides = {}) => ({
   ...overrides,
 });
 
+export const sanitizePublicSiteConfig = (siteConfig) => {
+  if (!siteConfig || typeof siteConfig !== 'object') return siteConfig ?? null;
+  const publicConfig = { ...siteConfig };
+  if (publicConfig.security && typeof publicConfig.security === 'object') {
+    publicConfig.security = { ...publicConfig.security };
+    delete publicConfig.security.webhookUrl;
+    delete publicConfig.security.webhook_url;
+  }
+  delete publicConfig.webhookUrl;
+  delete publicConfig.webhook_url;
+  return publicConfig;
+};
+
 // ---------------------------------------------------------------------------
 // Backend-driven module singleton.
 //
@@ -68,7 +81,8 @@ export const mergePlatformSettings = (overrides = {}) => ({
 
 let _settings = null;
 const _listeners = new Set();
-let _syncInProgress = false;
+let _syncPromise = null;
+let _hasSynced = false;
 
 function _notifyAll() {
   _listeners.forEach((fn) => fn());
@@ -82,38 +96,123 @@ function _notifyAll() {
  */
 export const updateLocalSettingsState = (settings) => {
   _settings = mergePlatformSettings(settings);
+  _hasSynced = true;
   _notifyAll();
 };
+
+function readAdminToken(token) {
+  if (token) return token;
+  try {
+    return localStorage.getItem('codex_admin_token') || '';
+  } catch {
+    return '';
+  }
+}
+
+async function settingsRequest(path, { method = 'GET', body, token } = {}) {
+  const headers = { Accept: 'application/json' };
+  const adminToken = readAdminToken(token);
+  if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const response = await fetch(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    const error = new Error(data?.error || `Settings request failed (${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
 
 /**
  * Fetch the current settings from the public backend endpoint and update
  * the module singleton. Idempotent - concurrent calls are collapsed.
  */
 export const syncSettingsFromBackend = async () => {
-  if (_syncInProgress) return;
-  _syncInProgress = true;
-  try {
-    if (!_settings) {
-      updateLocalSettingsState(DEFAULT_PLATFORM_SETTINGS);
-    }
-  } finally {
-    _syncInProgress = false;
+  if (_syncPromise) return _syncPromise;
+  if (_hasSynced) return _settings;
+  if (!_settings) {
+    _settings = mergePlatformSettings(DEFAULT_PLATFORM_SETTINGS);
+    _notifyAll();
   }
+
+  _syncPromise = settingsRequest('/api/crm/settings')
+    .then((data) => {
+      updateLocalSettingsState(data.settings || {});
+      return _settings;
+    })
+    .catch((error) => {
+      console.error('[platform settings] Could not load settings from the server:', error);
+      return _settings ?? DEFAULT_PLATFORM_SETTINGS;
+    })
+    .finally(() => {
+      _syncPromise = null;
+    });
+  return _syncPromise;
 };
 
 /**
- * Save settings to the in-memory store.
+ * Save platform settings and, optionally, the site configuration.
  */
-export const saveSettingsToApi = async (settings, _adminToken) => {
-  updateLocalSettingsState(settings);
-  return { ok: true, settings: _settings };
+export const saveSettingsToApi = async (settings, adminToken, siteConfig) => {
+  const body = { settings: settings || {} };
+  if (siteConfig !== undefined) body.site_config = siteConfig;
+  const data = await settingsRequest('/api/admin/settings', {
+    method: 'PUT',
+    body,
+    token: adminToken,
+  });
+  updateLocalSettingsState(data.settings || body.settings);
+  return data;
 };
 
 /**
- * Fetch settings from the in-memory store.
+ * Fetch settings and site content from the authenticated admin endpoint.
  */
-export const fetchAdminSettings = async (_adminToken) => {
-  return _settings ?? DEFAULT_PLATFORM_SETTINGS;
+export const fetchAdminSettings = async (adminToken) => {
+  const data = await settingsRequest('/api/admin/settings', { token: adminToken });
+  updateLocalSettingsState(data.settings || {});
+  return {
+    ...data,
+    settings: mergePlatformSettings(data.settings || {}),
+  };
+};
+
+export const fetchSiteConfigFromBackend = async ({ admin = false, adminToken } = {}) => {
+  const path = admin ? '/api/admin/settings' : '/api/crm/settings';
+  const data = await settingsRequest(path, { token: admin ? adminToken : undefined });
+  return data.site_config ?? null;
+};
+
+export const saveSiteConfigToApi = async (siteConfig, adminToken) => {
+  const data = await settingsRequest('/api/admin/settings', {
+    method: 'PUT',
+    body: { site_config: siteConfig },
+    token: adminToken,
+  });
+  if (data.settings) updateLocalSettingsState(data.settings);
+  return data.site_config ?? null;
+};
+
+function mergeSiteConfig(base, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const merged = { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}) };
+  Object.entries(patch).forEach(([key, value]) => {
+    merged[key] = value && typeof value === 'object' && !Array.isArray(value)
+      ? mergeSiteConfig(merged[key], value)
+      : value;
+  });
+  return merged;
+}
+
+export const updateSiteConfigToApi = async (patch, adminToken) => {
+  const current = await fetchSiteConfigFromBackend({ admin: true, adminToken });
+  return saveSiteConfigToApi(mergeSiteConfig(current || {}, patch), adminToken);
 };
 
 /**

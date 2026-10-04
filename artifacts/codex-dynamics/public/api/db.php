@@ -51,7 +51,20 @@ function getDb(): PDO {
         throw new RuntimeException('Production requires DB_HOST, DB_NAME, and DB_USER. SQLite fallback is disabled.');
     }
 
-    if ($hasMysqlConfig) {
+    $testSqliteFile = getenv('CODEX_SQLITE_PATH') ?: null;
+    if ($testSqliteFile && getenv('NODE_ENV') !== 'production') {
+        // Isolated local database path for repeatable API integration tests.
+        $testDataDir = dirname($testSqliteFile);
+        if (!is_dir($testDataDir)) {
+            @mkdir($testDataDir, 0755, true);
+        }
+        $pdo = new PDO("sqlite:{$testSqliteFile}", null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
+        $pdo->exec('PRAGMA journal_mode = WAL;');
+        $pdo->exec('PRAGMA foreign_keys = ON;');
+    } elseif ($hasMysqlConfig) {
         // MySQL connection
         $dsn = "mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4";
         $pdo = new PDO($dsn, $dbUser, $dbPass, [
@@ -98,6 +111,16 @@ function ensureDatabaseColumn(PDO $pdo, string $table, string $column, string $d
 }
 
 function initSchema(PDO $pdo): void {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS platform_settings (
+            id VARCHAR(64) PRIMARY KEY,
+            settings_json MEDIUMTEXT NOT NULL,
+            site_config_json MEDIUMTEXT NULL,
+            updated_by VARCHAR(128),
+            updated_at VARCHAR(40) NOT NULL
+        )
+    ");
+
     // 1. Leads Table
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS leads (
