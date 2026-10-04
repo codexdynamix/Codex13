@@ -169,7 +169,7 @@ export interface Project {
 }
 
 export interface ChatMessage {
-  id: number;
+  id: number | string;
   thread_id: string;
   sender: "visitor" | "operator" | "system" | "bot";
   sender_name: string;

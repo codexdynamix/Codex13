@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import ConfirmModal from '../ConfirmModal';
+import ConfirmModal from '../ConfirmModal/ConfirmModal';
 import { Send, Users, User, Info, Settings, ClipboardList, Receipt, Shield, AlertTriangle, Ban } from 'lucide-react';
 import {
   sendClientNotificationApi,
