@@ -2695,11 +2695,11 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     { name: 'Security & System', icon: faKey },
     { name: 'SEO & Search', icon: faGlobe },
     { name: 'Sessions', icon: faUsers },
-    { name: 'Recycle Bin', icon: faTrash },
     { name: 'Site Settings', icon: faCog },
     { name: 'CRM Settings', icon: faPalette },
     { name: 'Projects', icon: faBriefcase },
     { name: 'Audit Log', icon: faHistory },
+    { name: 'Recycle Bin', icon: faTrash },
   ];
 
   const [uploadOfficeId, setUploadOfficeId] = useState('');
