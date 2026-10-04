@@ -19,6 +19,7 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - The Super Admin Accounting workspace and the Accounting section in each client profile use the same invoice, payment, and recurring-service records. The workspace summarizes monthly activity, open and overdue balances, and scheduled monthly-equivalent service amounts; all totals stay grouped by currency.
 - Frontend typecheck: `npm run typecheck`; lint: `npm run lint`; PHP integration tests: `npm run test:api`
 - Local dev outside Replit: run `npm run dev --workspace=@workspace/api-server` (PHP on :8080) and `npm run dev`; Vite proxies `/api` to `API_PROXY_TARGET` (default `http://127.0.0.1:8080`).
+- Hostinger package: `npm run build && npm run package:hostinger` writes `artifacts/codex-dynamics/dist/hostinger-public_html.zip` (frontend build + `public/api`, excluding `data/` and `config.php`). The frontend builds to `artifacts/codex-dynamics/dist/public`.
 - PHP syntax checks: `php -l artifacts/codex-dynamics/public/api/index.php` and `php -l artifacts/codex-dynamics/public/api/db.php`
 
 ## Stack
