@@ -13,6 +13,8 @@ import Dashboard from '../components/Dashboard/Dashboard.jsx';
 import SiteSettingsTab from '../components/SiteSettings/SiteSettingsTab.jsx';
 import CrmSettingsTab from '../components/CrmSettings/CrmSettingsTab.jsx';
 import ProjectsTab from '../components/Projects/ProjectsTab.jsx';
+import ClientProjectsWorkspace from '../components/ClientProjectsWorkspace.jsx';
+import IdentityReviewsWorkspace from '../components/IdentityReviewsWorkspace.jsx';
 import SiteCrmWorkspace from '../components/SiteCrmWorkspace.jsx';
 import LeadProfileModal from '../components/LeadProfileModal.jsx';
 import StaffProfileModal from '../components/StaffProfileModal.jsx';
@@ -35,6 +37,8 @@ import {
 import {
   getAdminToken, getUserProfileHistoryApi,
   bulkAssignLeadsApi, bulkAssignLeadAssignmentsApi, deleteOffice, deleteTeam, deleteStaffApi, updateOffice, updateTeam,
+  listAdminClients, getAdminClientProjects, createAdminClientProject, updateAdminClientProject, archiveAdminClientProject,
+  getAdminClientIdentityReviews, resolveAdminClientIdentityReview,
   createStaffApi, updateStaffApi, resetLeadStatusApi, clearLeadCommentsApi,
   updateLeadApi, deleteLeadApi, restoreLeadApi,
   getLeadNotificationsAsAdmin, getAdminPendingCounts,
@@ -2644,6 +2648,44 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     const saved = sessionStorage.getItem('sa_activeTab');
     return saved === 'Settings' ? 'Site Settings' : (saved || 'Dashboard');
   });
+  const [clientProjects, setClientProjects] = useState([]);
+  const [clientProjectClients, setClientProjectClients] = useState([]);
+  const [clientProjectsLoading, setClientProjectsLoading] = useState(false);
+  const [clientProjectsError, setClientProjectsError] = useState('');
+  const [identityReviews, setIdentityReviews] = useState([]);
+  const [identityReviewsLoading, setIdentityReviewsLoading] = useState(false);
+  const [identityReviewsError, setIdentityReviewsError] = useState('');
+  const reloadClientProjects = async () => {
+    setClientProjectsLoading(true);
+    setClientProjectsError('');
+    try {
+      const [projects, clients] = await Promise.all([
+        getAdminClientProjects(),
+        listAdminClients({ limit: 500 }),
+      ]);
+      setClientProjects(projects);
+      setClientProjectClients(clients.clients || []);
+    } catch (error) {
+      setClientProjectsError(error.message || 'Client projects could not be loaded.');
+    } finally {
+      setClientProjectsLoading(false);
+    }
+  };
+  const reloadIdentityReviews = async () => {
+    setIdentityReviewsLoading(true);
+    setIdentityReviewsError('');
+    try {
+      setIdentityReviews(await getAdminClientIdentityReviews('pending'));
+    } catch (error) {
+      setIdentityReviewsError(error.message || 'Client identity reviews could not be loaded.');
+    } finally {
+      setIdentityReviewsLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (activeTab === 'Client Projects') void reloadClientProjects();
+    if (activeTab === 'Identity Reviews') void reloadIdentityReviews();
+  }, [activeTab]);
   const [staffSubTab, setStaffSubTab] = useState('Staff');
   const [activeSubTab, setActiveSubTab] = useState(() => {
     const saved = sessionStorage.getItem('sa_activeSubTab');
@@ -2688,6 +2730,8 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
   const tabs = [
     { name: 'Dashboard', icon: faTachometerAlt },
     { name: 'Client Management', icon: faUsers },
+    { name: 'Client Projects', icon: faBriefcase },
+    { name: 'Identity Reviews', icon: faIdCard },
     { name: 'Sessions', icon: faUsers },
     { name: 'Staff', icon: faUsers },
     { name: 'Agent Access', icon: faKey },
@@ -3026,7 +3070,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
               className="crm-super-admin-tabs"
             >
               {tabs.map(tab => {
-                const badge = 0;
+                const badge = tab.name === 'Identity Reviews' ? identityReviews.length : 0;
                 return (
                   <button
                     key={tab.name}
@@ -3882,6 +3926,38 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
                   </div>
                 )}
               </div>
+            ) : activeTab === 'Client Projects' ? (
+              <ClientProjectsWorkspace
+                clients={clientProjectClients}
+                projects={clientProjects}
+                loading={clientProjectsLoading}
+                error={clientProjectsError}
+                onReload={reloadClientProjects}
+                onCreate={async (payload) => {
+                  await createAdminClientProject(payload);
+                  await reloadClientProjects();
+                  showNotification('Client project created.');
+                }}
+                onUpdate={async (projectId, payload) => {
+                  await updateAdminClientProject(projectId, payload);
+                  await reloadClientProjects();
+                  showNotification('Client project updated.');
+                }}
+                onDelete={async (projectId) => {
+                  await archiveAdminClientProject(projectId);
+                  await reloadClientProjects();
+                  showNotification('Client project archived.');
+                }}
+              />
+            ) : activeTab === 'Identity Reviews' ? (
+              <IdentityReviewsWorkspace
+                reviews={identityReviews}
+                loading={identityReviewsLoading}
+                error={identityReviewsError}
+                onReload={reloadIdentityReviews}
+                onResolve={({ review, decision, primaryClientId }) =>
+                  resolveAdminClientIdentityReview(review, decision, primaryClientId)}
+              />
             ) : activeTab === 'Dashboard' ? (
               <Dashboard offices={data.offices} teams={data.teams} staffUsers={data.users} />
             ) : activeTab === 'Site Settings' ? (

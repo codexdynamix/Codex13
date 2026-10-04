@@ -52,7 +52,12 @@ import {
 import { toast } from "sonner";
 import { calculateReadingTime } from "@/lib/reading-time";
 import { analyzePowerWords, POWER_WORDS_DICTIONARY } from "@/lib/power-words";
-import { getStoredCategories, addCategory, type BlogCategory } from "@/lib/categories";
+import { getLegacyStoredCategories, type BlogCategory } from "@/lib/categories";
+import {
+  addAdminBlogCategory,
+  getAdminBlogCategories,
+  importLegacyAdminBlogCategories,
+} from "@/crm/admin-app/adminApi";
 import { ImagePickerModal, type ImageSelectionMeta } from "./ImagePickerModal";
 import type { BlogPost } from "@/types/crm";
 
@@ -193,20 +198,49 @@ export function BlogEditorPage({
   const [categoriesList, setCategoriesList] = useState<BlogCategory[]>([]);
   const [newCatName, setNewCatName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categorySaving, setCategorySaving] = useState(false);
 
   useEffect(() => {
-    setCategoriesList(getStoredCategories());
+    let active = true;
+    const loadCategories = async () => {
+      setCategoriesLoading(true);
+      try {
+        const migrationKey = "codex_blog_categories_imported_v1";
+        if (!window.localStorage.getItem(migrationKey)) {
+          const legacyCategories = getLegacyStoredCategories();
+          if (legacyCategories.length) await importLegacyAdminBlogCategories(legacyCategories);
+          window.localStorage.setItem(migrationKey, "1");
+        }
+        const categories = await getAdminBlogCategories();
+        if (active) setCategoriesList(categories);
+      } catch (error) {
+        if (active) toast.error(error instanceof Error ? error.message : "Blog categories could not be loaded.");
+      } finally {
+        if (active) setCategoriesLoading(false);
+      }
+    };
+    void loadCategories();
+    return () => { active = false; };
   }, []);
 
-  const handleAddNewCategory = (e: React.FormEvent) => {
+  const handleAddNewCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCatName.trim()) return;
-    const cat = addCategory(newCatName.trim());
-    setCategoriesList(getStoredCategories());
-    setSelectedCategory(cat.name);
-    setNewCatName("");
-    setIsAddingCategory(false);
-    toast.success(`Category "${cat.name}" added`);
+    if (!newCatName.trim() || categorySaving) return;
+    setCategorySaving(true);
+    try {
+      const result = await addAdminBlogCategory(newCatName.trim());
+      const categories = await getAdminBlogCategories();
+      setCategoriesList(categories);
+      setSelectedCategory(result.category?.name || newCatName.trim());
+      setNewCatName("");
+      setIsAddingCategory(false);
+      toast.success(`Category "${result.category?.name || newCatName.trim()}" saved`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Category could not be saved.");
+    } finally {
+      setCategorySaving(false);
+    }
   };
 
   // 6. Content Stats & Power Words

@@ -25,8 +25,11 @@ export function TidioWidget() {
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string>("");
+  const [chatToken, setChatToken] = useState<string>("");
+  const [chatError, setChatError] = useState("");
   const [hasUnread, setHasUnread] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messageCountRef = useRef(0);
 
   const [currentPath, setCurrentPath] = useState(() => {
     return typeof window !== "undefined" ? window.location.pathname : "/";
@@ -58,7 +61,8 @@ export function TidioWidget() {
   const isLeft = tidio?.position === "bottom-left";
   const hideMobile = Boolean(tidio?.hideOnMobile);
 
-  // Initialize or load visitor thread ID from localStorage
+  // Keep a stable local ID for migrating browser-only history, and a separate
+  // unguessable token for the database-backed visitor chat API.
   useEffect(() => {
     if (typeof window === "undefined") return;
     let storedId = localStorage.getItem("cdx_visitor_chat_thread");
@@ -67,20 +71,81 @@ export function TidioWidget() {
       localStorage.setItem("cdx_visitor_chat_thread", storedId);
     }
     setThreadId(storedId);
+
+    const tokenKey = "cdx_visitor_chat_token_v1";
+    let storedToken = localStorage.getItem(tokenKey) || "";
+    if (!/^[A-Za-z0-9-]{32,128}$/.test(storedToken)) {
+      storedToken = crypto.randomUUID();
+      localStorage.setItem(tokenKey, storedToken);
+    }
+    setChatToken(storedToken);
   }, []);
 
-  // Load visitor chat messages from localStorage
-  useEffect(() => {
-    if (!threadId || isExternalTidio || !isEnabled || typeof window === "undefined") return;
-    try {
-      const saved = localStorage.getItem(`cdx_chat_msgs_${threadId}`);
-      if (saved) {
-        setMessages(JSON.parse(saved));
+  const syncDatabaseMessages = async (token: string, legacyThreadId: string) => {
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Chat-Token": token,
+    };
+    const request = async (path: string, body?: Record<string, unknown>) => {
+      const response = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers,
+        credentials: "same-origin",
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "Chat messages could not be synchronized.");
       }
-    } catch {
-      // ignore
+      return result;
+    };
+
+    const migrationKey = `cdx_chat_migrated_${token}`;
+    if (!localStorage.getItem(migrationKey)) {
+      const rawLegacy = localStorage.getItem(`cdx_chat_msgs_${legacyThreadId}`);
+      if (rawLegacy) {
+        const legacy = JSON.parse(rawLegacy);
+        if (!Array.isArray(legacy)) throw new Error("The saved chat backup is invalid.");
+        await request("/api/crm/chat/import", { messages: legacy });
+        localStorage.setItem(migrationKey, "1");
+        localStorage.removeItem(`cdx_chat_msgs_${legacyThreadId}`);
+      } else {
+        localStorage.setItem(migrationKey, "1");
+      }
     }
-  }, [threadId, isExternalTidio, isEnabled]);
+
+    const result = await request("/api/crm/chat/messages");
+    const nextMessages: ChatMessage[] = (Array.isArray(result.messages) ? result.messages : []).map((message: any) => ({
+      id: message.id,
+      thread_id: legacyThreadId,
+      sender: message.sender === "client" ? "visitor" : message.sender === "agent" ? "operator" : "bot",
+      sender_name: message.sender_name || "",
+      message: message.body || "",
+      created_at: message.created_at,
+      is_read: Number(message.is_read || 0),
+    }));
+    if (nextMessages.length > messageCountRef.current && !isOpen) {
+      const hasIncoming = nextMessages.slice(messageCountRef.current).some((message) => message.sender !== "visitor");
+      if (hasIncoming) setHasUnread(true);
+    }
+    messageCountRef.current = nextMessages.length;
+    setMessages(nextMessages);
+    setChatError("");
+  };
+
+  // Migrate any browser-only history once, then use the shared database thread.
+  useEffect(() => {
+    if (!threadId || !chatToken || isExternalTidio || !isEnabled || typeof window === "undefined") return;
+    let active = true;
+    const sync = () => syncDatabaseMessages(chatToken, threadId)
+      .catch((error) => { if (active) setChatError(error.message || "Chat messages could not be synchronized."); });
+    void sync();
+    const timer = isOpen ? window.setInterval(sync, 7000) : null;
+    return () => {
+      active = false;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [threadId, chatToken, isExternalTidio, isEnabled, isOpen]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -428,14 +493,15 @@ export function TidioWidget() {
 
   const handleSendMessage = async (textToSend?: string) => {
     const content = (textToSend || inputText).trim();
-    if (!content || isSending || !threadId) return;
+    if (!content || isSending || !threadId || !chatToken) return;
 
     setIsSending(true);
+    setChatError("");
     if (!textToSend) setInputText("");
 
     // Optimistic message
     const tempMsg: ChatMessage = {
-      id: Date.now(),
+      id: `pending_${Date.now()}`,
       thread_id: threadId,
       sender: "visitor",
       sender_name: "You",
@@ -446,25 +512,23 @@ export function TidioWidget() {
     setMessages((prev) => [...prev, tempMsg]);
 
     try {
-      const isFirst = messages.length === 0;
-      const nextList: ChatMessage[] = [...messages, tempMsg];
-      if (isFirst) {
-        nextList.push({
-          id: Date.now() + 1,
-          thread_id: threadId,
-          sender: "operator",
-          sender_name: tidio?.agentName || "Codex Support",
-          message: "Thanks for reaching out! A member of our team will follow up shortly.",
-          created_at: new Date().toISOString(),
-          is_read: 1,
-        });
+      const response = await fetch("/api/crm/chat/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Chat-Token": chatToken,
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({ message: content }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "Your message could not be sent.");
       }
-      setMessages(nextList);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`cdx_chat_msgs_${threadId}`, JSON.stringify(nextList));
-      }
-    } catch {
-      // ignore
+      await syncDatabaseMessages(chatToken, threadId);
+    } catch (error) {
+      setMessages((prev) => prev.filter((message) => message.id !== tempMsg.id));
+      setChatError(error instanceof Error ? error.message : "Your message could not be sent.");
     } finally {
       setIsSending(false);
     }
@@ -600,6 +664,11 @@ export function TidioWidget() {
           </div>
 
           {/* Chat Input Bar */}
+          {chatError && (
+            <p role="alert" className="px-3 pt-2 text-xs text-red-700 bg-white" aria-live="polite">
+              {chatError}
+            </p>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();

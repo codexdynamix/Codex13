@@ -22,6 +22,17 @@ import {
   Eraser,
   CornerDownLeft,
 } from 'lucide-react';
+import {
+  clearAdminChat,
+  deleteAdminMessage,
+  getAdminChatThreads,
+  getAdminMessages,
+  getStoredAdminProfile,
+  importLegacyAdminChatThreads,
+  markAdminMessagesRead,
+  sendAdminMessage,
+  saveAdminChatThreadMeta,
+} from '../adminApi';
 
 const CHAT_STORAGE_KEY = 'codex_crm_chat_threads_v3';
 
@@ -237,44 +248,88 @@ const INITIAL_THREADS = [];
 const DEMO_THREAD_IDS = new Set(LEGACY_DEMO_THREADS.map((thread) => thread.id));
 
 export default function LiveChatWorkspace({ showNotification = () => {} }) {
-  const [threads, setThreads] = useState(() => {
-    try {
-      const stored = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter((thread) => !DEMO_THREAD_IDS.has(thread.id));
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(cleaned));
-          }
-          return cleaned;
-        }
-      }
-    } catch {
-      // Start empty if the browser cache cannot be read.
-    }
-    return INITIAL_THREADS;
-  });
-
-  const [selectedThreadId, setSelectedThreadId] = useState(() => {
-    return INITIAL_THREADS[0]?.id || null;
-  });
+  const [threads, setThreads] = useState([]);
+  const [selectedThreadId, setSelectedThreadId] = useState(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [agentInput, setAgentInput] = useState('');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [showArchivedView, setShowArchivedView] = useState(false);
+  const [isLoadingThreads, setIsLoadingThreads] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const [currentAdmin, setCurrentAdmin] = useState(() => getStoredAdminProfile());
 
   const messagesEndRef = useRef(null);
 
-  // Sync to local storage
-  useEffect(() => {
+  const normalizeThread = (thread) => ({
+    ...thread,
+    id: thread.client_id || thread.id,
+    visitor_name: thread.visitor_name || 'Client',
+    visitor_email: thread.visitor_email || '',
+    location: thread.company || '',
+    status: thread.is_archived ? 'archived' : thread.status,
+    is_archived: Boolean(thread.is_archived),
+    unread_count: Number(thread.unread_count || 0),
+    assigned_agent: thread.assigned_agent || 'Unassigned',
+    notes: thread.notes || '',
+    messages: [],
+  });
+
+  const reloadThreads = async ({ quiet = false } = {}) => {
+    if (!quiet) setIsLoadingThreads(true);
     try {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(threads));
-    } catch {
-      // Ignore
+      const profile = getStoredAdminProfile();
+      setCurrentAdmin(profile);
+      const migrationKey = 'codex_crm_chat_imported_v1';
+      if (profile?.role === 'Super Admin' && !localStorage.getItem(migrationKey)) {
+        const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+        if (raw) {
+          const legacyThreads = JSON.parse(raw);
+          if (!Array.isArray(legacyThreads)) throw new Error('The saved chat backup is not a conversation list.');
+          const migration = legacyThreads.filter((thread) => !DEMO_THREAD_IDS.has(thread.id));
+          if (migration.length) {
+            const result = await importLegacyAdminChatThreads(migration);
+            if (!(result.skipped || []).length) localStorage.setItem(migrationKey, '1');
+            else setChatError(`${result.skipped.length} older conversations need identity review before they can be imported.`);
+          } else {
+            localStorage.setItem(migrationKey, '1');
+          }
+        } else {
+          localStorage.setItem(migrationKey, '1');
+        }
+      }
+      const result = await getAdminChatThreads({ includeArchived: true });
+      setThreads((previous) => {
+        const previousById = new Map(previous.map((thread) => [thread.id, thread]));
+        return result.map((rawThread) => {
+          const thread = normalizeThread(rawThread);
+          return { ...thread, messages: previousById.get(thread.id)?.messages || [] };
+        });
+      });
+      setSelectedThreadId((current) => result.some((thread) => (thread.client_id || thread.id) === current)
+        ? current
+        : ((result.find((thread) => !thread.is_archived)?.client_id
+          || result.find((thread) => !thread.is_archived)?.id
+          || result[0]?.client_id
+          || result[0]?.id
+          || null)));
+    } catch (error) {
+      setChatError(error.message || 'Conversations could not be loaded.');
+    } finally {
+      if (!quiet) setIsLoadingThreads(false);
     }
-  }, [threads]);
+  };
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (active) void reloadThreads({ quiet: isLoadingThreads });
+    };
+    void reloadThreads();
+    const timer = window.setInterval(refresh, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   // Read Tidio config from site settings if present
   const tidioInfo = useMemo(() => {
@@ -296,6 +351,38 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
   const activeThread = useMemo(() => {
     return threads.find((t) => t.id === selectedThreadId) || threads[0] || null;
   }, [threads, selectedThreadId]);
+
+  const reloadMessages = async (clientId, { markRead = false } = {}) => {
+    if (!clientId) return;
+    const result = await getAdminMessages(clientId, { limit: 100 });
+    const messages = result.messages.map((message) => ({
+      id: message.id,
+      sender: message.sender === 'agent' ? 'agent' : message.sender === 'system' ? 'system' : 'visitor',
+      sender_name: message.senderName || message.sender_name || '',
+      text: message.body || message.text || '',
+      created_at: message.timestamp || message.createdAt || message.created_at,
+    }));
+    setThreads((prev) => prev.map((thread) => thread.id === clientId
+      ? { ...thread, messages, unread_count: markRead ? 0 : result.unreadCount }
+      : thread));
+    if (markRead && result.unreadCount > 0) await markAdminMessagesRead(clientId);
+  };
+
+  useEffect(() => {
+    if (!activeThread?.id) return undefined;
+    let active = true;
+    const load = async () => {
+      try {
+        await reloadMessages(activeThread.id, { markRead: true });
+        if (active) setChatError('');
+      } catch (error) {
+        if (active) setChatError(error.message || 'Messages could not be loaded.');
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 7000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [activeThread?.id]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -326,102 +413,79 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
   }, [threads]);
 
   // Handle agent sending a reply
-  const handleSendAgentMessage = () => {
+  const handleSendAgentMessage = async () => {
     const text = agentInput.trim();
-    if (!text || !activeThread) return;
-
-    const newMessage = {
-      id: `m_${Date.now()}`,
-      sender: 'agent',
-      sender_name: 'Alex Morgan (Agent)',
-      text,
-      created_at: new Date().toISOString(),
-    };
-
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id === activeThread.id) {
-          return {
-            ...t,
-            status: 'active',
-            unread_count: 0,
-            messages: [...t.messages, newMessage],
-          };
-        }
-        return t;
-      })
-    );
-
-    setAgentInput('');
-    showNotification('Reply sent to visitor.');
+    if (!text || !activeThread || isSending) return;
+    setIsSending(true);
+    setChatError('');
+    try {
+      await sendAdminMessage(activeThread.id, text);
+      setAgentInput('');
+      await Promise.all([reloadMessages(activeThread.id), reloadThreads({ quiet: true })]);
+      showNotification('Reply sent to Client.');
+    } catch (error) {
+      setChatError(error.message || 'The reply could not be sent.');
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  // Delete individual message from the active thread
-  const handleDeleteMessage = (messageId) => {
-    if (!activeThread) return;
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id === activeThread.id) {
-          return {
-            ...t,
-            messages: t.messages.filter((m) => m.id !== messageId),
-          };
-        }
-        return t;
-      })
-    );
-    showNotification('Message deleted.');
+  const handleDeleteMessage = async (messageId) => {
+    if (!activeThread || !window.confirm('Delete this message for everyone?')) return;
+    try {
+      await deleteAdminMessage(messageId);
+      await reloadMessages(activeThread.id);
+      showNotification('Message deleted.');
+    } catch (error) {
+      setChatError(error.message || 'The message could not be deleted.');
+    }
   };
 
-  // Clear entire conversation history for the active thread
-  const handleClearHistory = () => {
-    if (!activeThread) return;
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id === activeThread.id) {
-          return {
-            ...t,
-            messages: [
-              {
-                id: `sys_clear_${Date.now()}`,
-                sender: 'system',
-                text: 'Chat history cleared by agent',
-                created_at: new Date().toISOString(),
-              },
-            ],
-          };
-        }
-        return t;
-      })
-    );
-    showNotification('Chat history cleared.');
+  const handleClearHistory = async () => {
+    if (!activeThread || !window.confirm('Permanently delete every message in this conversation? This cannot be undone.')) return;
+    try {
+      await clearAdminChat(activeThread.id);
+      await reloadMessages(activeThread.id);
+      await reloadThreads({ quiet: true });
+      showNotification('Conversation history deleted.');
+    } catch (error) {
+      setChatError(error.message || 'The conversation history could not be deleted.');
+    }
   };
 
-  // Archive or restore active thread/person
-  const handleToggleArchive = (threadId = activeThread?.id) => {
+  const handleToggleArchive = async (threadId = activeThread?.id) => {
     if (!threadId) return;
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id === threadId) {
-          const willArchive = !t.is_archived;
-          return { ...t, is_archived: willArchive };
-        }
-        return t;
-      })
-    );
-    const target = threads.find((t) => t.id === threadId);
-    showNotification(target?.is_archived ? 'Conversation unarchived.' : 'Conversation archived.');
+    const target = threads.find((thread) => thread.id === threadId);
+    const willArchive = !target?.is_archived;
+    try {
+      await saveAdminChatThreadMeta(threadId, {
+        status: target?.status === 'waiting' ? 'waiting' : 'active',
+        is_archived: willArchive,
+        notes: target?.notes || '',
+      });
+      await reloadThreads({ quiet: true });
+      showNotification(willArchive ? 'Conversation archived.' : 'Conversation restored.');
+    } catch (error) {
+      setChatError(error.message || 'The conversation could not be updated.');
+    }
   };
 
-  // Permanently delete a person/thread from chat
   const handleDeletePerson = (threadId = activeThread?.id) => {
     if (!threadId) return;
-    setThreads((prev) => prev.filter((t) => t.id !== threadId));
-    if (selectedThreadId === threadId) {
-      const remaining = threads.filter((t) => t.id !== threadId);
-      setSelectedThreadId(remaining[0]?.id || null);
+    void handleToggleArchive(threadId);
+  };
+
+  const handleSaveThreadNotes = async (threadId, notes) => {
+    if (!threadId) return;
+    try {
+      await saveAdminChatThreadMeta(threadId, {
+        status: activeThread?.status === 'waiting' ? 'waiting' : 'active',
+        is_archived: Boolean(activeThread?.is_archived),
+        notes,
+      });
+    } catch (error) {
+      setChatError(error.message || 'Internal notes could not be saved.');
     }
-    showNotification('Person removed from chat.');
   };
 
   const summaryCards = [
@@ -837,29 +901,18 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
               </div>
             </div>
 
-            {/* Quick Actions Card with Archive, Delete Person, and Delete Chat History */}
+            {/* Conversation actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => handleToggleArchive(activeThread.id)}
-                  className="crm-chat-panel-action-btn"
-                  title={activeThread.is_archived ? 'Unarchive conversation' : 'Archive conversation'}
-                >
-                  {activeThread.is_archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-                  <span>{activeThread.is_archived ? 'Unarchive' : 'Archive'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDeletePerson(activeThread.id)}
-                  className="crm-chat-panel-action-btn danger"
-                  title="Delete person from chat"
-                >
-                  <Trash2 size={13} />
-                  <span>Delete Person</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => handleToggleArchive(activeThread.id)}
+                className="crm-chat-panel-action-btn"
+                title={activeThread.is_archived ? 'Unarchive conversation' : 'Archive conversation'}
+                style={{ width: '100%', justifyContent: 'center' }}
+              >
+                {activeThread.is_archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+                <span>{activeThread.is_archived ? 'Unarchive' : 'Archive'}</span>
+              </button>
 
               {/* Deleting chat history option in visitor context / profile */}
               <button
@@ -921,7 +974,7 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
             <div>
               <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255, 255, 255, 0.5)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <FileText size={13} />
-                <span>Internal Notes</span>
+                <span>Private Client Notes</span>
               </span>
               <textarea
                 rows={3}
@@ -932,6 +985,7 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
                     prev.map((t) => (t.id === activeThread.id ? { ...t, notes: val } : t))
                   );
                 }}
+                onBlur={(e) => { void handleSaveThreadNotes(activeThread.id, e.currentTarget.value); }}
                 placeholder="Private agent notes..."
                 style={{
                   width: '100%',

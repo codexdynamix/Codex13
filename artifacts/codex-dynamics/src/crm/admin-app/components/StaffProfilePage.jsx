@@ -19,6 +19,9 @@ import {
   deleteTeam,
   getStaffCapabilities,
   updateStaffCapabilities,
+  getStaffNotesAdmin,
+  addStaffNoteAdmin,
+  importLegacyStaffNotesAdmin,
   blockStaffApi,
   unblockStaffApi,
 } from '../adminApi.js';
@@ -202,9 +205,13 @@ export default function StaffProfilePage({
   const [leadStageFilter, setLeadStageFilter] = useState('');
   const [staffNoteInput, setStaffNoteInput] = useState('');
   const [staffNotes, setStaffNotes] = useState([]);
+  const [staffNotesLoading, setStaffNotesLoading] = useState(false);
+  const [staffNoteSaving, setStaffNoteSaving] = useState(false);
+  const [staffNoteError, setStaffNoteError] = useState('');
 
   useEffect(() => {
     if (!staff) return;
+    let cancelled = false;
     setEditName(staff.isOfficeOnly || staff.isTeamOnly ? '' : staff.name || '');
     setEditEmail(staff.email || '');
     setEditOfficeId(officeObj?.id || staff.officeId || teamObj?.officeId || '');
@@ -213,12 +220,30 @@ export default function StaffProfilePage({
     setEditTeamName(teamObj?.name || '');
     setEditTeamMaxSize(teamObj?.maxSize != null ? String(teamObj.maxSize) : '');
     setNewPassword('');
-    try {
-      const savedNotes = localStorage.getItem(`crm_staff_notes:${staff.id}`);
-      setStaffNotes(savedNotes ? JSON.parse(savedNotes) : []);
-    } catch {
-      setStaffNotes([]);
-    }
+    setStaffNotesLoading(true);
+    setStaffNoteError('');
+    const loadNotes = async () => {
+      try {
+        const migrationKey = `crm_staff_notes_imported_v1:${staff.id}`;
+        if (!localStorage.getItem(migrationKey)) {
+          const raw = localStorage.getItem(`crm_staff_notes:${staff.id}`);
+          if (raw) {
+            const legacyNotes = JSON.parse(raw);
+            if (!Array.isArray(legacyNotes)) throw new Error('The saved staff-note backup is invalid.');
+            if (legacyNotes.length) await importLegacyStaffNotesAdmin(staff.id, legacyNotes);
+          }
+          localStorage.setItem(migrationKey, '1');
+        }
+        const notes = await getStaffNotesAdmin(staff.id);
+        if (!cancelled) setStaffNotes(notes);
+      } catch (error) {
+        if (!cancelled) setStaffNoteError(error.message || 'Staff notes could not be loaded.');
+      } finally {
+        if (!cancelled) setStaffNotesLoading(false);
+      }
+    };
+    void loadNotes();
+    return () => { cancelled = true; };
   }, [
     staff?.id,
     staff?.name,
@@ -655,24 +680,22 @@ export default function StaffProfilePage({
     navigate(workspacePath);
   };
 
-  const handleAddStaffNote = () => {
+  const handleAddStaffNote = async () => {
     const text = staffNoteInput.trim();
-    if (!text) return;
-    const next = [
-      {
-        id: `sn_${Date.now()}`,
-        text,
-        by: currentUser?.name || 'Admin',
-        date: new Date().toISOString().slice(0, 10),
-      },
-      ...staffNotes,
-    ];
-    setStaffNotes(next);
-    setStaffNoteInput('');
+    if (!text || !staff?.id || staffNoteSaving) return;
+    setStaffNoteSaving(true);
+    setStaffNoteError('');
     try {
-      localStorage.setItem(`crm_staff_notes:${staff.id}`, JSON.stringify(next));
-    } catch {}
-    showNotification?.('Staff note saved.');
+      const result = await addStaffNoteAdmin(staff.id, text);
+      if (result?.note) setStaffNotes((previous) => [result.note, ...previous]);
+      setStaffNoteInput('');
+      showNotification?.('Staff note saved.');
+    } catch (error) {
+      setStaffNoteError(error.message || 'Staff note could not be saved.');
+      showNotification?.(error.message || 'Staff note could not be saved.');
+    } finally {
+      setStaffNoteSaving(false);
+    }
   };
 
   const pwStrength = computePasswordStrength(newPassword);
@@ -1392,6 +1415,8 @@ export default function StaffProfilePage({
             {/* Staff Supervision Notes */}
             <div className="crm-comment-card">
               <h3>📝 Staff Supervision Notes</h3>
+              {staffNotesLoading && <p role="status">Loading saved notes…</p>}
+              {staffNoteError && <p role="alert" className="crm-error-text">{staffNoteError}</p>}
               <div className="crm-comment-input-area">
                 <textarea
                   rows={4}
@@ -1401,11 +1426,12 @@ export default function StaffProfilePage({
                 />
                 <div className="crm-comment-input-actions">
                   <button
+                    type="button"
                     className="crm-post-comment-btn"
                     onClick={handleAddStaffNote}
-                    disabled={!staffNoteInput.trim()}
+                    disabled={!staffNoteInput.trim() || staffNoteSaving}
                   >
-                    Save Note
+                    {staffNoteSaving ? 'Saving…' : 'Save Note'}
                   </button>
                 </div>
               </div>

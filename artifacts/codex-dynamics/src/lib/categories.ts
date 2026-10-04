@@ -22,6 +22,22 @@ export const DEFAULT_CATEGORIES: BlogCategory[] = [
 
 const STORAGE_KEY = "codex_blog_custom_categories";
 
+export function getLegacyStoredCategories(): BlogCategory[] {
+  if (typeof window === "undefined") return [];
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The saved blog-category backup is invalid.");
+  }
+  if (!Array.isArray(parsed)) throw new Error("The saved blog-category backup is not a category list.");
+  return parsed.filter((category): category is BlogCategory =>
+    Boolean(category && typeof category === "object" && typeof category.name === "string" && category.name.trim())
+  );
+}
+
 export function getStoredCategories(): BlogCategory[] {
   if (typeof window === "undefined") return DEFAULT_CATEGORIES;
   try {

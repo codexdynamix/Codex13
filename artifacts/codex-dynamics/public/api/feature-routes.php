@@ -185,7 +185,6 @@ function codexFeatureHandleStaffNotes(PDO $pdo, string $apiPath, string $method,
         jsonResponse(['ok' => true, 'note' => ['id' => $id, 'text' => $text, 'by' => $actor['name'], 'date' => substr($now, 0, 10), 'created_at' => $now]], 201);
     }
 
-    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can import browser-only staff notes.'], 403);
     $notes = $input['notes'] ?? null;
     if (!is_array($notes) || count($notes) > 500) jsonResponse(['ok' => false, 'error' => 'Provide at most 500 legacy notes.'], 422);
     $insert = $pdo->prepare('INSERT INTO staff_notes (id, staff_id, created_by_staff_id, created_by_name, body, created_at) VALUES (?, ?, ?, ?, ?, ?)');
@@ -231,7 +230,6 @@ function codexFeatureHandleBlogCategories(PDO $pdo, string $apiPath, string $met
         }
         if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
         if (!empty($input['categories']) && is_array($input['categories'])) {
-            if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can import browser-only categories.'], 403);
             if (count($input['categories']) > 250) jsonResponse(['ok' => false, 'error' => 'Provide at most 250 categories.'], 422);
             $imported = 0;
             foreach ($input['categories'] as $category) {
@@ -358,11 +356,16 @@ function codexFeatureHandleClientProjects(PDO $pdo, string $apiPath, string $met
         jsonResponse(['ok' => true, 'deleted' => true]);
     }
     if ($method !== 'PATCH') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
-    $allowed = ['name', 'description', 'service', 'status', 'progress', 'start_date', 'target_date', 'team_lead', 'milestones', 'recent_updates'];
+    $allowed = ['client_id', 'name', 'description', 'service', 'status', 'progress', 'start_date', 'target_date', 'team_lead', 'milestones', 'recent_updates'];
     $updates = [];
     foreach ($allowed as $field) {
         if (!array_key_exists($field, $input)) continue;
-        if (in_array($field, ['milestones', 'recent_updates'], true)) {
+        if ($field === 'client_id') {
+            $targetClientId = trim((string)$input[$field]);
+            if ($targetClientId === '') jsonResponse(['ok' => false, 'error' => 'Choose a Client for this project.'], 422);
+            requireVisibleLead($pdo, $actor, $targetClientId);
+            $updates[$field] = $targetClientId;
+        } elseif (in_array($field, ['milestones', 'recent_updates'], true)) {
             if (!is_array($input[$field])) jsonResponse(['ok' => false, 'error' => ucfirst(str_replace('_', ' ', $field)) . ' must be an array.'], 422);
             $updates[$field] = json_encode($input[$field]);
         } elseif ($field === 'progress') {
@@ -913,6 +916,11 @@ function codexFeatureHandleWebhook(PDO $pdo, string $apiPath, string $method, ar
     if (!in_array($apiPath, ['/admin/settings/webhook', '/admin/settings/webhook-test'], true)) return false;
     requireSuperAdmin($pdo, $adminSession);
     if ($apiPath === '/admin/settings/webhook') {
+        if ($method === 'GET') {
+            $record = readPlatformSettingsRecord($pdo);
+            $siteConfig = is_array($record['site_config'] ?? null) ? $record['site_config'] : [];
+            jsonResponse(['ok' => true, 'url' => codexFeatureWebhookUrl($siteConfig)]);
+        }
         if ($method !== 'PATCH') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
         $url = trim((string)($input['url'] ?? ''));
         if ($url !== '') codexFeatureValidateWebhookUrl($url);

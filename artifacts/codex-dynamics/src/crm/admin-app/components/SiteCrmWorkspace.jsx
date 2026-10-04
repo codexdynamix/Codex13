@@ -8,6 +8,11 @@ import {
   listAdminClients,
   runAdminSiteContentAction,
   uploadAdminSiteImage,
+  changeCurrentAdminPassword,
+  getAdminWebhookSettings,
+  getStoredAdminProfile,
+  saveAdminWebhookSettings,
+  testAdminWebhookSettings,
 } from '../adminApi.js';
 
 const TABS = [
@@ -32,18 +37,18 @@ async function crmAction(action, payload = {}) {
   if (action === 'upload_image') {
     return uploadAdminSiteImage(payload);
   }
-  if (action === 'save_webhook' || action === 'test_webhook' || action === 'change_password') {
-    throw new Error('This action is not available through the persistent Site CRM API.');
-  }
+  if (action === 'save_webhook') return saveAdminWebhookSettings(payload.url);
+  if (action === 'test_webhook') return testAdminWebhookSettings();
+  if (action === 'change_password') return changeCurrentAdminPassword(payload.currentPassword, payload.newPassword);
   return runAdminSiteContentAction(action, payload);
 }
 
-function Button({ children, onClick, danger = false, secondary = false, disabled = false }) {
-  return <button type="button" disabled={disabled} className={`crm-site-crm-btn${secondary ? ' secondary' : ''}${danger ? ' danger' : ''}`} onClick={onClick}>{children}</button>;
+function Button({ children, onClick, danger = false, secondary = false, disabled = false, type = 'button' }) {
+  return <button type={type} disabled={disabled} className={`crm-site-crm-btn${secondary ? ' secondary' : ''}${danger ? ' danger' : ''}`} onClick={onClick}>{children}</button>;
 }
 
-function Field({ label, value, onChange, multiline = false, type = 'text' }) {
-  const props = { value: value ?? '', onChange: (e) => onChange(e.target.value), type };
+function Field({ label, value, onChange, multiline = false, type = 'text', autoComplete, minLength }) {
+  const props = { value: value ?? '', onChange: (e) => onChange(e.target.value), type, autoComplete, minLength };
   return <label className="crm-site-crm-field"><span>{label}</span>{multiline ? <textarea {...props} rows={4} /> : <input {...props} />}</label>;
 }
 
@@ -69,7 +74,7 @@ function RecordForm({ type, onSaved, onCancel, initial }) {
     {type === 'blog' && <><Field label="Title" value={form.title} onChange={(v) => set('title', v)} /><Field label="Slug" value={form.slug} onChange={(v) => set('slug', v)} /><Field label="Excerpt" value={form.excerpt} onChange={(v) => set('excerpt', v)} multiline /><Field label="Content" value={form.content} onChange={(v) => set('content', v)} multiline /><Field label="Category" value={form.category} onChange={(v) => set('category', v)} /></>}
     {type === 'review' && <><Field label="Author" value={form.author} onChange={(v) => set('author', v)} /><Field label="Rating" value={form.rating} onChange={(v) => set('rating', Number(v))} type="number" /><Field label="Comment" value={form.comment} onChange={(v) => set('comment', v)} multiline /><label className="crm-site-crm-check"><input type="checkbox" checked={Boolean(form.is_published)} onChange={(e) => set('is_published', e.target.checked)} /> Published</label></>}
     {type === 'project' && <><Field label="Title" value={form.title} onChange={(v) => set('title', v)} /><Field label="Site name" value={form.site_name} onChange={(v) => set('site_name', v)} /><Field label="Site URL" value={form.site_url} onChange={(v) => set('site_url', v)} /><Field label="Category" value={form.category} onChange={(v) => set('category', v)} /><Field label="Description" value={form.description} onChange={(v) => set('description', v)} multiline /><Field label="Image URL" value={form.image_url} onChange={(v) => set('image_url', v)} /><label className="crm-site-crm-check"><input type="checkbox" checked={Boolean(form.is_published)} onChange={(e) => set('is_published', e.target.checked)} /> Published</label></>}
-    <div className="crm-site-crm-form-actions"><Button secondary onClick={onCancel}>Cancel</Button><Button disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button></div>
+    <div className="crm-site-crm-form-actions"><Button secondary onClick={onCancel}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button></div>
   </form>;
 }
 
@@ -88,8 +93,13 @@ export default function SiteCrmWorkspace({
   const [formType, setFormType] = useState(null);
   const [editing, setEditing] = useState(null);
   const [webhook, setWebhook] = useState('');
+  const [webhookError, setWebhookError] = useState('');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [webhookSaving, setWebhookSaving] = useState(false);
+  const [webhookTesting, setWebhookTesting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const load = async () => {
@@ -113,10 +123,21 @@ export default function SiteCrmWorkspace({
           showNotification(`${result.imported || 0} old Site CRM records were saved. ${result.skipped} need review; their browser backup was kept.`);
         }
       }
+      const profile = getStoredAdminProfile();
+      setIsSuperAdmin(profile?.role === 'Super Admin');
       const [content, clientResult] = await Promise.all([
         getAdminSiteContent(),
         listAdminClients({ limit: 500 }),
       ]);
+      if (profile?.role === 'Super Admin') {
+        try {
+          const webhookSettings = await getAdminWebhookSettings();
+          setWebhook(webhookSettings.url || '');
+          setWebhookError('');
+        } catch (error) {
+          setWebhookError(error.message || 'Webhook settings could not be loaded.');
+        }
+      }
       const clients = clientResult.clients || [];
       const enquiries = clients.filter((client) => client.source && /website|contact|enquiry/i.test(client.source));
       setData({
@@ -134,7 +155,6 @@ export default function SiteCrmWorkspace({
         },
         settings: content.settings || {},
       });
-      setWebhook(content.settings?.webhookUrl || '');
     } catch (error) {
       setLoadError(error.message || 'The Site CRM data could not be loaded.');
       setData(null);
@@ -144,8 +164,15 @@ export default function SiteCrmWorkspace({
   useEffect(() => { setTab(defaultTab); }, [defaultTab]);
 
   const run = async (action, payload = {}) => {
-    try { await crmAction(action, payload); await load(); showNotification('Saved to the database.'); }
-    catch (error) { window.alert(error.message); }
+    try {
+      const result = await crmAction(action, payload);
+      if (action !== 'test_webhook') await load();
+      showNotification(result?.message || (action === 'test_webhook' ? 'Webhook test sent.' : 'Saved to the database.'));
+      return true;
+    } catch (error) {
+      window.alert(error.message);
+      return false;
+    }
   };
   const enquiries = data?.enquiries || [];
   const blogs = data?.blogs || [];
@@ -157,11 +184,50 @@ export default function SiteCrmWorkspace({
   const closeForm = () => { setFormType(null); setEditing(null); };
   const edit = (type, item) => { setFormType(type); setEditing(item); };
 
+  const saveWebhook = async () => {
+    setWebhookSaving(true);
+    setWebhookError('');
+    try {
+      const result = await saveAdminWebhookSettings(webhook);
+      setWebhook(result.url ?? webhook);
+      showNotification(result.message || 'Webhook URL saved.');
+    } catch (error) {
+      setWebhookError(error.message || 'Webhook URL could not be saved.');
+    } finally {
+      setWebhookSaving(false);
+    }
+  };
+
+  const testWebhook = async () => {
+    setWebhookTesting(true);
+    setWebhookError('');
+    try {
+      const result = await testAdminWebhookSettings();
+      showNotification(result.message || 'Webhook test sent.');
+    } catch (error) {
+      setWebhookError(error.message || 'Webhook test failed.');
+    } finally {
+      setWebhookTesting(false);
+    }
+  };
+
   const changePassword = async (event) => {
     event.preventDefault();
     if (passwords.newPassword !== passwords.confirmPassword) return window.alert('New passwords do not match.');
-    await run('change_password', { currentPassword: passwords.currentPassword, newPassword: passwords.newPassword });
-    setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    if (passwords.newPassword.length < 12) return window.alert('New password must be at least 12 characters.');
+    setPasswordSaving(true);
+    try {
+      const result = await crmAction('change_password', {
+        currentPassword: passwords.currentPassword,
+        newPassword: passwords.newPassword,
+      });
+      setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      showNotification(result?.message || 'Password updated.');
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      setPasswordSaving(false);
+    }
   };
   const uploadImage = async (event) => {
     const file = event.target.files?.[0];
@@ -215,7 +281,57 @@ export default function SiteCrmWorkspace({
       <LiveChatWorkspace showNotification={showNotification} />
     )}
 
-    {tab === 'tools' && <div className="crm-site-crm-tools"><div className="crm-site-crm-panel"><h3>Webhook</h3><Field label="Webhook URL" value={webhook} onChange={setWebhook} /><Button onClick={() => run('save_webhook', { url: webhook })}>Save webhook</Button><Button secondary onClick={() => run('test_webhook', { url: webhook })}>Send test</Button></div><div className="crm-site-crm-panel"><h3>Backup and restore</h3><p>Download the shared CRM data or restore a previous JSON snapshot.</p><Button onClick={() => { const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `codex-site-crm-${new Date().toISOString().slice(0, 10)}.json`; link.click(); }}>Export backup</Button><label className="crm-site-crm-upload">Restore backup<input type="file" accept="application/json" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await run('restore_backup', { backupData: JSON.parse(await file.text()) }); }} /></label></div><div className="crm-site-crm-panel"><h3>Admin password</h3><form className="crm-site-crm-form" onSubmit={changePassword}><Field label="Current password" value={passwords.currentPassword} onChange={(v) => setPasswords((p) => ({ ...p, currentPassword: v }))} type="password" /><Field label="New password" value={passwords.newPassword} onChange={(v) => setPasswords((p) => ({ ...p, newPassword: v }))} type="password" /><Field label="Confirm new password" value={passwords.confirmPassword} onChange={(v) => setPasswords((p) => ({ ...p, confirmPassword: v }))} type="password" /><Button>Change password</Button></form></div><div className="crm-site-crm-panel"><h3>Media upload</h3><p>Upload an image to the shared site media library. The resulting URL is copied for use in content.</p><label className="crm-site-crm-upload">{uploading ? 'Uploading...' : 'Choose image'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" disabled={uploading} onChange={uploadImage} /></label></div></div>}
+    {tab === 'tools' && (
+      <div className="crm-site-crm-tools">
+        {isSuperAdmin && (
+          <div className="crm-site-crm-panel">
+            <h3>Webhook</h3>
+            {webhookError && <p role="alert" className="crm-error-text">{webhookError}</p>}
+            <Field label="Webhook URL" value={webhook} onChange={setWebhook} />
+            <Button disabled={webhookSaving} onClick={saveWebhook}>{webhookSaving ? 'Saving…' : 'Save webhook'}</Button>
+            <Button secondary disabled={webhookTesting} onClick={testWebhook}>{webhookTesting ? 'Sending…' : 'Send test'}</Button>
+          </div>
+        )}
+        <div className="crm-site-crm-panel">
+          <h3>Backup and restore</h3>
+          <p>Download the shared CRM data or restore a previous JSON snapshot.</p>
+          <Button onClick={() => {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `codex-site-crm-${new Date().toISOString().slice(0, 10)}.json`;
+            link.click();
+            URL.revokeObjectURL(link.href);
+          }}>Export backup</Button>
+          <label className="crm-site-crm-upload">Restore backup<input type="file" accept="application/json" onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            try {
+              await run('restore_backup', { backupData: JSON.parse(await file.text()) });
+            } catch (error) {
+              window.alert(error.message || 'Backup file is invalid.');
+            } finally {
+              e.target.value = '';
+            }
+          }} /></label>
+        </div>
+        <div className="crm-site-crm-panel">
+          <h3>Admin password</h3>
+          <form className="crm-site-crm-form" onSubmit={changePassword}>
+            <Field label="Current password" value={passwords.currentPassword} onChange={(v) => setPasswords((p) => ({ ...p, currentPassword: v }))} type="password" autoComplete="current-password" />
+            <Field label="New password" value={passwords.newPassword} onChange={(v) => setPasswords((p) => ({ ...p, newPassword: v }))} type="password" autoComplete="new-password" minLength={12} />
+            <Field label="Confirm new password" value={passwords.confirmPassword} onChange={(v) => setPasswords((p) => ({ ...p, confirmPassword: v }))} type="password" autoComplete="new-password" minLength={12} />
+            <p>Use at least 12 characters. Your other active sessions will be signed out.</p>
+            <Button type="submit" disabled={passwordSaving}>{passwordSaving ? 'Updating…' : 'Change password'}</Button>
+          </form>
+        </div>
+        <div className="crm-site-crm-panel">
+          <h3>Media upload</h3>
+          <p>Upload an image to the shared site media library. The resulting URL is copied for use in content.</p>
+          <label className="crm-site-crm-upload">{uploading ? 'Uploading...' : 'Choose image'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" disabled={uploading} onChange={uploadImage} /></label>
+        </div>
+      </div>
+    )}
 
     {formType && <div className="crm-site-crm-modal"><div className="crm-site-crm-modal-card"><div className="crm-site-crm-panel-heading"><h3>{formTitle}</h3><Button secondary onClick={closeForm}>Close</Button></div><RecordForm type={formType} initial={editing} onCancel={closeForm} onSaved={async () => { closeForm(); await load(); }} /></div></div>}
   </section>;

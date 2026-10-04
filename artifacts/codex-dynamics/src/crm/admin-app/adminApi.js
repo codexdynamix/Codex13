@@ -640,9 +640,9 @@ export async function getAdminChatThreads({ includeArchived = false } = {}) {
 
 export async function saveAdminChatThreadMeta(clientId, updates) {
   if (!clientId) throw new Error('client_id required');
-  return adminFetch('/api/admin/messages/thread-meta', {
-    method: 'POST',
-    body: { client_id: clientId, ...updates },
+  return adminFetch(`/api/admin/messages/threads/${encodeURIComponent(clientId)}`, {
+    method: 'PATCH',
+    body: updates,
   });
 }
 
@@ -672,6 +672,91 @@ export async function importLegacyStaffNotesAdmin(staffId, notes) {
   return adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes/import`, {
     method: 'POST',
     body: { notes },
+  });
+}
+
+export async function getAdminClientProjects() {
+  const data = await adminFetch('/api/admin/client-projects');
+  return Array.isArray(data?.projects) ? data.projects : [];
+}
+
+export async function createAdminClientProject(project) {
+  return adminFetch('/api/admin/client-projects', { method: 'POST', body: project });
+}
+
+export async function updateAdminClientProject(projectId, updates) {
+  if (!projectId) throw new Error('project_id required');
+  return adminFetch(`/api/admin/client-projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    body: updates,
+  });
+}
+
+export async function archiveAdminClientProject(projectId) {
+  if (!projectId) throw new Error('project_id required');
+  return adminFetch(`/api/admin/client-projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getAdminClientIdentityReviews(status = 'pending') {
+  const query = new URLSearchParams({ status: String(status || 'pending') });
+  const data = await adminFetch(`/api/admin/client-identity-reviews?${query.toString()}`);
+  return Array.isArray(data?.reviews) ? data.reviews : [];
+}
+
+export async function resolveAdminClientIdentityReview(review, decision, primaryClientId = null) {
+  if (!review?.client_id_a || !review?.client_id_b) throw new Error('A Client identity review is required.');
+  return adminFetch(
+    `/api/admin/client-identity-reviews/${encodeURIComponent(review.client_id_a)}/${encodeURIComponent(review.client_id_b)}`,
+    {
+      method: 'POST',
+      body: {
+        decision,
+        ...(primaryClientId ? { primary_client_id: primaryClientId } : {}),
+      },
+    },
+  );
+}
+
+export async function getAdminBlogCategories() {
+  const data = await adminFetch('/api/admin/blog/categories');
+  return Array.isArray(data?.categories) ? data.categories : [];
+}
+
+export async function addAdminBlogCategory(name) {
+  return adminFetch('/api/admin/blog/categories', {
+    method: 'POST',
+    body: { name },
+  });
+}
+
+export async function importLegacyAdminBlogCategories(categories) {
+  return adminFetch('/api/admin/blog/categories', {
+    method: 'POST',
+    body: { categories },
+  });
+}
+
+export async function getAdminWebhookSettings() {
+  return adminFetch('/api/admin/settings/webhook');
+}
+
+export async function saveAdminWebhookSettings(url) {
+  return adminFetch('/api/admin/settings/webhook', {
+    method: 'PATCH',
+    body: { url },
+  });
+}
+
+export async function testAdminWebhookSettings() {
+  return adminFetch('/api/admin/settings/webhook-test', { method: 'POST' });
+}
+
+export async function changeCurrentAdminPassword(currentPassword, newPassword) {
+  return adminFetch('/api/admin/me/password', {
+    method: 'PUT',
+    body: { current_password: currentPassword, new_password: newPassword },
   });
 }
 
