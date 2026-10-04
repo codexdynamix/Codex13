@@ -1,0 +1,27 @@
+Overall
+The project has a partially corrected Client model, but it does not yet meet the full architecture specification. Many records and settings already use the PHP API and database. The main remaining gaps are local-only chat and staff notes, unfinished Client terminology, and the lack of a database-backed admin path for client-owned projects.
+Still using browser storage for business data
+Admin chat history: LiveChatWorkspace.jsx saves threads and messages in localStorage. The PHP messaging API and database exist, but this workspace does not use them.
+Visitor chat history: the internal mode of TidioWidget.tsx stores the visitor’s thread and messages in localStorage; it also adds a scripted reply locally. This is not a centrally stored support conversation.
+Staff notes: StaffProfilePage.jsx reads and writes notes in localStorage. A staff_notes table and API helper functions exist, but the page does not call them, and I found no matching PHP routes.
+Blog categories: the active blog editor saves custom categories under codex_blog_custom_categories in localStorage. Blog posts themselves use the database, but the category list is not centrally managed.
+These records won’t reliably follow users to another browser or device.
+Missing or incomplete server-backed features
+Client-owned project management: the portal API reads client_projects by Client ID, but I found no PHP admin CRUD routes for those records. The portalDatabase admin project helpers only alter in-memory state, and I found no active callers. The active ProjectsTab.jsx manages public portfolio/showcase projects, which are stored centrally but are not client-owned project work.
+Site CRM tools: the active workspace displays “Save webhook,” “Send test,” and “Change password” controls, but their actions deliberately throw an “not available through the persistent Site CRM API” error.
+Identity review: the active SQLite database contains a pending ambiguous identity pair, but I found no admin API or UI to inspect and resolve these reviews. The migration does flag email collisions rather than guessing, which is safer, but the review process is incomplete.
+Client identity and legacy terminology
+What is in place: clients is the canonical customer table, and client_portal_access is keyed by client_id. Portal signup can link an existing Client when one matches, and stage changes operate on the existing identity rather than requiring a new customer record.
+What remains: the active code still uses “lead” as a customer concept in CRM component names, variables, API helpers, PHP queries, and some route handling. The database also retains a write-through leads compatibility view with triggers, plus archived legacy tables. Those compatibility pieces mean this is not yet a complete Client terminology migration.
+There is also mock/legacy code in the source tree, including localCrmStore and handleLocalMock in adminApi.js. I found no call site for handleLocalMock, so I did not find evidence that it is currently serving as a live fallback. Similarly, legacy demo fixtures remain in shared.jsx, but the exported initial data uses empty arrays. These are cleanup concerns, not evidence that the active CRM is currently showing those sample customers.
+What is already database-backed
+The active implementation has database/API paths for Client records and portal access, newsletter subscribers, public portfolio content, site settings, signup/reset flows, accounting, websites/domains/hosting, notifications, support messages, and mail integration. The portfolio and Site CRM browser records have one-time import paths that remove the old local copy after a successful import.
+Browser storage also contains items that are appropriate to keep local, such as UI tab selections, preview state, theme/preferences, and session/authentication tokens that are checked by the server. Site settings are API/database-backed; local storage is used as a cache, and the live preview uses session storage.
+One integrity limitation: SQLite adds guards against creating new references to unknown Client IDs. MySQL relies more on application-level checks for legacy tables rather than consistent database foreign keys, so integrity across database engines was not confirmed.
+Verification performed and not performed
+PHP syntax checks passed for index.php and db.php.
+The isolated API integration suite passed 10/10 tests. It covered settings and appointments, newsletter validation/deduplication, and Hostinger access/scoping.
+Those tests do not cover chat or staff-note persistence, client-project CRUD, identity-review resolution, the full Client lifecycle, portal ownership across modules, signup/reset flows, or impersonation write restrictions.
+I did not run the frontend build/typecheck or verify signed-in pages in a browser. Those areas remain unverified.
+I inspected the active SQLite database read-only. The nested database copy documented as inactive was left untouched.
+The highest-priority fixes are the local-only conversations and notes, the unresolved identity-review workflow and legacy Client terminology, and client-owned project management.
