@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@replit/vite-plugin-cartographer": "^0.6.1",
-    "@replit/vite-plugin-runtime-error-modal": "^0.0.6"
+    "@replit/vite-plugin-runtime-error-modal": "^0.0.6",
+    "react-router-dom": "^7.18.4"
   }
 }

@@ -1,0 +1,1 @@
+export function enterClientPortal(clientId: string | number): Promise<unknown>;

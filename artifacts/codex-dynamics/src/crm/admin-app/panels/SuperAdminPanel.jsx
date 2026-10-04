@@ -35,7 +35,7 @@ import {
 import {
   getAdminToken, getUserProfileHistoryApi,
   bulkAssignLeadsApi, bulkAssignLeadAssignmentsApi, deleteOffice, deleteTeam, deleteStaffApi, updateOffice, updateTeam,
-  updateStaffApi, resetLeadStatusApi, clearLeadCommentsApi,
+  createStaffApi, updateStaffApi, resetLeadStatusApi, clearLeadCommentsApi,
   updateLeadApi, deleteLeadApi, restoreLeadApi,
   getLeadNotificationsAsAdmin, getAdminPendingCounts,
   restoreOfficeApi, restoreTeamApi, restoreStaffApi, deleteOfficePermanent, deleteTeamPermanent,
@@ -77,6 +77,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
   const [bulkMode, setBulkMode] = useState(null); // null | 'assign' | 'shuffle'
   const [bulkOfficeId, setBulkOfficeId] = useState('');
   const [bulkTeamId, setBulkTeamId] = useState('');
+  const [bulkTeamLeaderId, setBulkTeamLeaderId] = useState('');
   const [bulkAgentId, setBulkAgentId] = useState('');
   const [shuffleScope, setShuffleScope] = useState('agents'); // 'offices' | 'teams' | 'agents'
   const [shuffleTargets, setShuffleTargets] = useState([]); // array of ids
@@ -146,19 +147,28 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
   // Bulk assign all selected leads to one specific office/team/agent
   const handleBulkAssign = async () => {
     if (selected.length === 0) { showNotification('Select at least one lead first.'); return; }
-    if (!bulkOfficeId && !bulkTeamId && !bulkAgentId) {
-      showNotification('Pick a destination (office, team, or agent).');
+    if (!bulkOfficeId && !bulkTeamId && !bulkTeamLeaderId && !bulkAgentId) {
+      showNotification('Pick a destination (office, team, Team Leader, or agent).');
       return;
     }
     let officeId = bulkOfficeId || null;
     let teamId = bulkTeamId || null;
+    let teamLeaderId = bulkTeamLeaderId || null;
     let agentId = bulkAgentId || null;
     const previousLeads = data.leads;
     const previousSelection = [...selected];
-    const previousBulkState = { mode: bulkMode, officeId: bulkOfficeId, teamId: bulkTeamId, agentId: bulkAgentId };
+    const previousBulkState = { mode: bulkMode, officeId: bulkOfficeId, teamId: bulkTeamId, teamLeaderId: bulkTeamLeaderId, agentId: bulkAgentId };
     if (agentId) {
       const agent = data.users.find(u => u.id === agentId);
       if (agent) { teamId = teamId || agent.teamId; officeId = officeId || agent.officeId; }
+    }
+    if (teamLeaderId) {
+      const leader = data.users.find(u => u.id === teamLeaderId);
+      if (leader) {
+        teamId = teamId || leader.teamId || null;
+        officeId = officeId || leader.officeId || null;
+      }
+      agentId = null;
     }
     if (teamId) {
       const team = data.teams.find(t => t.id === teamId);
@@ -168,15 +178,15 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     setData(prev => ({
       ...prev,
       leads: prev.leads.map(l => selected.includes(l.id)
-        ? { ...l, assignedToOffice: officeId, assignedToTeam: teamId, assignedToAgent: agentId }
+        ? { ...l, assignedToOffice: officeId, assignedToTeam: teamId, assignedToTeamLeader: teamLeaderId, assignedToAgent: agentId }
         : l
       ),
     }));
     setSelected([]);
-    setBulkOfficeId(''); setBulkTeamId(''); setBulkAgentId('');
+    setBulkOfficeId(''); setBulkTeamId(''); setBulkTeamLeaderId(''); setBulkAgentId('');
     setBulkMode(null);
     try {
-      const result = await bulkAssignLeadsApi(selected, { officeId, teamId, agentId });
+      const result = await bulkAssignLeadsApi(selected, { officeId, teamId, teamLeaderId, agentId });
       if (result.leads?.length) {
         const updatedIds = new Set(result.leads.map((lead) => lead.id));
         setData((prev) => ({
@@ -190,6 +200,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
       setSelected(previousSelection);
       setBulkOfficeId(previousBulkState.officeId);
       setBulkTeamId(previousBulkState.teamId);
+      setBulkTeamLeaderId(previousBulkState.teamLeaderId);
       setBulkAgentId(previousBulkState.agentId);
       setBulkMode(previousBulkState.mode || 'assign');
       showNotification(err.message || 'Bulk assign failed; no changes were saved.');
@@ -489,11 +500,11 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     if (pool.length === 0) { showNotification('No leads match the shuffle pool.'); return; }
 
     // Build per-target groups (round-robin) - one bulk call per group instead of one call per lead
-    const groups = new Map(); // targetId → { leadIds, officeId, teamId, agentId }
+    const groups = new Map(); // targetId → { leadIds, officeId, teamId, teamLeaderId, agentId }
     pool.forEach((lead, idx) => {
       const targetId = shuffleTargets[idx % shuffleTargets.length];
       if (!groups.has(targetId)) {
-        let officeId = null, teamId = null, agentId = null;
+        let officeId = null, teamId = null, teamLeaderId = null, agentId = null;
         if (shuffleScope === 'offices') {
           officeId = targetId;
         } else if (shuffleScope === 'teams') {
@@ -505,8 +516,13 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
           agentId = targetId;
           teamId = agent ? agent.teamId : null;
           officeId = agent ? agent.officeId : null;
+        } else if (shuffleScope === 'team-leaders') {
+          const leader = data.users.find(u => u.id === targetId);
+          teamLeaderId = targetId;
+          teamId = leader ? leader.teamId : null;
+          officeId = leader ? leader.officeId : null;
         }
-        groups.set(targetId, { leadIds: [], officeId, teamId, agentId });
+        groups.set(targetId, { leadIds: [], officeId, teamId, teamLeaderId, agentId });
       }
       groups.get(targetId).leadIds.push(lead.id);
     });
@@ -517,14 +533,14 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     // Optimistic update - single setData call covering all affected leads
     setData(prev => {
       const assignMap = new Map();
-      groups.forEach(({ leadIds, officeId, teamId, agentId }) => {
-        leadIds.forEach(id => assignMap.set(id, { officeId, teamId, agentId }));
+      groups.forEach(({ leadIds, officeId, teamId, teamLeaderId, agentId }) => {
+        leadIds.forEach(id => assignMap.set(id, { officeId, teamId, teamLeaderId, agentId }));
       });
       return {
         ...prev,
         leads: prev.leads.map(l => {
           const a = assignMap.get(l.id);
-          return a ? { ...l, assignedToOffice: a.officeId, assignedToTeam: a.teamId, assignedToAgent: a.agentId } : l;
+          return a ? { ...l, assignedToOffice: a.officeId, assignedToTeam: a.teamId, assignedToTeamLeader: a.teamLeaderId, assignedToAgent: a.agentId } : l;
         }),
       };
     });
@@ -537,8 +553,8 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     // Send every shuffled destination in one transaction so a partial network
     // failure cannot leave only some groups assigned.
     try {
-      const assignments = [...groups.values()].flatMap(({ leadIds, officeId, teamId, agentId }) =>
-        leadIds.map((leadId) => ({ leadId, officeId, teamId, agentId }))
+      const assignments = [...groups.values()].flatMap(({ leadIds, officeId, teamId, teamLeaderId, agentId }) =>
+        leadIds.map((leadId) => ({ leadId, officeId, teamId, teamLeaderId, agentId }))
       );
       const result = await bulkAssignLeadAssignmentsApi(assignments);
       if (result.leads?.length) {
@@ -1299,6 +1315,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
                     onChange={e => {
                       const agId = e.target.value;
                       setBulkAgentId(agId);
+                      setBulkTeamLeaderId('');
                       if (agId) {
                         const agent = data.users.find(u => u.id === agId);
                         if (agent) { setBulkOfficeId(agent.officeId || ''); setBulkTeamId(agent.teamId || ''); }
@@ -1328,20 +1345,51 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
                 </div>
               </div>
 
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Or assign directly to a Team Leader</div>
+                <select
+                  className="crm-super-admin-select"
+                  style={{ width: '100%' }}
+                  value={bulkTeamLeaderId}
+                  onChange={e => {
+                    const leaderId = e.target.value;
+                    const leader = data.users.find(u => u.id === leaderId);
+                    setBulkTeamLeaderId(leaderId);
+                    setBulkAgentId('');
+                    setBulkOfficeId(leader?.officeId || '');
+                    setBulkTeamId(leader?.teamId || '');
+                  }}
+                >
+                  <option value="">- No direct Team Leader -</option>
+                  {data.offices.map(office => {
+                    const leaders = data.users.filter(u => u.role === ROLE.TEAM_LEADER && u.officeId === office.id);
+                    if (!leaders.length) return null;
+                    return (
+                      <optgroup key={office.id} label={`${office.name} - Team Leaders`}>
+                        {leaders.map(leader => <option key={leader.id} value={leader.id}>{leader.name}{leader.teamId ? ` (${getTeamName(leader.teamId, data.teams)})` : ' (standalone)'}</option>)}
+                      </optgroup>
+                    );
+                  })}
+                  {data.users.filter(u => u.role === ROLE.TEAM_LEADER && !u.officeId).map(leader => (
+                    <option key={leader.id} value={leader.id}>{leader.name} (standalone)</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Or office/team only */}
               <div style={{ borderTop: '1px solid var(--crm-border)', paddingTop: 10 }}>
                 <div style={{ fontSize: 11, color: 'var(--crm-text-secondary)', marginBottom: 8 }}>Or assign to Office / Team only</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   <div style={{ flex: '1 1 160px' }}>
                     <div style={{ fontSize: 11, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Office</div>
-                    <select className="crm-super-admin-select" style={{ width: '100%' }} value={bulkOfficeId} onChange={e => { setBulkOfficeId(e.target.value); setBulkTeamId(''); setBulkAgentId(''); }}>
+                    <select className="crm-super-admin-select" style={{ width: '100%' }} value={bulkOfficeId} onChange={e => { setBulkOfficeId(e.target.value); setBulkTeamId(''); setBulkTeamLeaderId(''); setBulkAgentId(''); }}>
                       <option value="">- None (Pool) -</option>
                       {data.offices.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                     </select>
                   </div>
                   <div style={{ flex: '1 1 160px' }}>
                     <div style={{ fontSize: 11, color: 'var(--crm-text-secondary)', marginBottom: 4 }}>Team</div>
-                    <select className="crm-super-admin-select" style={{ width: '100%' }} value={bulkTeamId} onChange={e => { setBulkTeamId(e.target.value); setBulkAgentId(''); }} disabled={!bulkOfficeId}>
+                    <select className="crm-super-admin-select" style={{ width: '100%' }} value={bulkTeamId} onChange={e => { setBulkTeamId(e.target.value); setBulkTeamLeaderId(''); setBulkAgentId(''); }} disabled={!bulkOfficeId}>
                       <option value="">- None -</option>
                       {data.teams.filter(t => t.officeId === bulkOfficeId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
@@ -1365,6 +1413,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
                     <option value="offices">Offices</option>
                     <option value="teams">Teams</option>
                     <option value="agents">Agents</option>
+                    <option value="team-leaders">Team Leaders (direct)</option>
                   </select>
                 </div>
                 <div>
@@ -1381,6 +1430,10 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
               <div style={{ maxHeight: 140, overflowY: 'auto', background: 'var(--crm-bg)', border: '1px solid var(--crm-border)', borderRadius: 6, padding: 8, display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
                 {(shuffleScope === 'offices' ? data.offices.map(o => ({ id: o.id, label: o.name })) :
                   shuffleScope === 'teams' ? data.teams.map(t => ({ id: t.id, label: `${t.name} (${getOfficeName(t.officeId, data.offices)})` })) :
+                  shuffleScope === 'team-leaders' ? data.users.filter(u => u.role === ROLE.TEAM_LEADER).map(u => ({
+                    id: u.id,
+                    label: `${u.name}  /  ${u.teamId ? getTeamName(u.teamId, data.teams) : 'standalone'}`,
+                  })) :
                   data.users.filter(u => u.role === ROLE.AGENT).map(u => ({ id: u.id, label: `${u.name}  /  ${getTeamName(u.teamId, data.teams)}` }))
                 ).map(t => (
                   <button
@@ -2297,6 +2350,9 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
   const [staffSearch, setStaffSearch] = useState('');
   const [staffRoleFilter, setStaffRoleFilter] = useState(''); // '' | 'Office Manager' | 'Team Leader' | 'Agent'
   const [staffStructureFilter, setStaffStructureFilter] = useState('all');
+  const [showCreateSuperAdmin, setShowCreateSuperAdmin] = useState(false);
+  const [newSuperAdmin, setNewSuperAdmin] = useState({ name: '', email: '', password: '' });
+  const [creatingSuperAdmin, setCreatingSuperAdmin] = useState(false);
 
   // Staff blocking
   // Derived from data.users so the badge always reflects backend truth
@@ -2311,6 +2367,28 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     ),
     [data.users]
   );
+
+  const handleCreateSuperAdmin = async (event) => {
+    event.preventDefault();
+    if (creatingSuperAdmin) return;
+    setCreatingSuperAdmin(true);
+    try {
+      const staff = await createStaffApi({
+        role: ROLE.SUPER_ADMIN,
+        name: newSuperAdmin.name.trim(),
+        email: newSuperAdmin.email.trim(),
+        password: newSuperAdmin.password,
+      });
+      setData((prev) => ({ ...prev, users: [...prev.users.filter((user) => user.id !== staff.id), staff] }));
+      setNewSuperAdmin({ name: '', email: '', password: '' });
+      setShowCreateSuperAdmin(false);
+      showNotification('Super Admin account created.');
+    } catch (error) {
+      showNotification(error?.message || 'Could not create the Super Admin account.');
+    } finally {
+      setCreatingSuperAdmin(false);
+    }
+  };
   // Info modal: { type: 'office' | 'team', id }
   const [infoModal, setInfoModal] = useState(null);
 
@@ -3658,12 +3736,46 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
                   </div>
                 ) : (
                   <div style={{ padding: 24 }}>
+                    {showCreateSuperAdmin && (
+                      <div className="crm-super-admin-modal-overlay" onClick={() => setShowCreateSuperAdmin(false)}>
+                        <form
+                          className="crm-super-admin-modal-card"
+                          style={{ maxWidth: 520 }}
+                          onSubmit={handleCreateSuperAdmin}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="crm-super-admin-modal-header">
+                            <span>Create Super Admin</span>
+                            <button type="button" className="crm-super-admin-btn crm-super-admin-btn-small" onClick={() => setShowCreateSuperAdmin(false)}>Close</button>
+                          </div>
+                          <div style={{ display: 'grid', gap: 12, padding: 20 }}>
+                            <label className="crm-super-admin-form-group">
+                              <span>Name</span>
+                              <input className="crm-super-admin-input" required autoComplete="name" value={newSuperAdmin.name} onChange={(event) => setNewSuperAdmin((current) => ({ ...current, name: event.target.value }))} />
+                            </label>
+                            <label className="crm-super-admin-form-group">
+                              <span>Email</span>
+                              <input className="crm-super-admin-input" type="email" required autoComplete="email" value={newSuperAdmin.email} onChange={(event) => setNewSuperAdmin((current) => ({ ...current, email: event.target.value }))} />
+                            </label>
+                            <label className="crm-super-admin-form-group">
+                              <span>Temporary password (8 characters minimum)</span>
+                              <input className="crm-super-admin-input" type="password" required minLength={8} autoComplete="new-password" value={newSuperAdmin.password} onChange={(event) => setNewSuperAdmin((current) => ({ ...current, password: event.target.value }))} />
+                            </label>
+                          </div>
+                          <div className="crm-super-admin-modal-actions">
+                            <button type="button" className="crm-super-admin-btn crm-super-admin-btn-secondary" onClick={() => setShowCreateSuperAdmin(false)}>Cancel</button>
+                            <button type="submit" className="crm-super-admin-btn" disabled={creatingSuperAdmin}>{creatingSuperAdmin ? 'Creating…' : 'Create account'}</button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
                     <div className="crm-super-admin-card" style={{ marginBottom: 20 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
                         <div>
                           <h2 style={{ margin: '0 0 4px 0' }}>All Staff Directory</h2>
-                          <p style={{ margin: 0, color: 'var(--crm-text-secondary)', fontSize: 13 }}>{staffRows.length} staff member{staffRows.length !== 1 ? 's' : ''} - managers, team leaders, and agents across all offices</p>
+                          <p style={{ margin: 0, color: 'var(--crm-text-secondary)', fontSize: 13 }}>{staffRows.length} staff member{staffRows.length !== 1 ? 's' : ''} - administrators, managers, team leaders, and agents</p>
                         </div>
+                        <button className="crm-super-admin-btn" onClick={() => setShowCreateSuperAdmin(true)}>+ Create Super Admin</button>
                       </div>
                     </div>
                     <div className="crm-super-admin-card">
@@ -3674,6 +3786,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
                           <option value={ROLE.OFFICE_MANAGER}>Office Managers</option>
                           <option value={ROLE.TEAM_LEADER}>Team Leaders</option>
                           <option value={ROLE.AGENT}>Agents</option>
+                          <option value={ROLE.SUPER_ADMIN}>Super Admins</option>
                         </select>
                         <select className="crm-super-admin-select" style={{ flex: '0 0 210px' }} value={staffStructureFilter} onChange={e => setStaffStructureFilter(e.target.value)}>
                           <option value="all">All structures</option>

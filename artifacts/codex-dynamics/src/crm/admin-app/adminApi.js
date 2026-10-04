@@ -1459,10 +1459,11 @@ export async function importLeadsApi(leads) {
   return { ...result, leads: (result.leads || []).map(mapLeadRow) };
 }
 
-export async function bulkAssignLeadsApi(leadIds, { officeId, teamId, agentId } = {}) {
+export async function bulkAssignLeadsApi(leadIds, { officeId, teamId, teamLeaderId, agentId } = {}) {
   const body = { lead_ids: leadIds };
   if (officeId !== undefined) body.assigned_office_id = officeId;
   if (teamId   !== undefined) body.assigned_team_id   = teamId;
+  if (teamLeaderId !== undefined) body.assigned_team_leader_id = teamLeaderId;
   if (agentId  !== undefined) body.assigned_agent_id  = agentId;
   return adminFetch('/api/admin/leads/assign-bulk', { method: 'POST', body });
 }

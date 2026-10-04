@@ -8,6 +8,21 @@ export interface ClientLoginSplitViewProps {
   onSuccess?: () => void;
 }
 
+type AccountAccessMode = 'login' | 'signup' | 'complete-signup' | 'forgot' | 'reset';
+
+async function submitPortalAccessRequest(path: string, body: Record<string, string>) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || 'The request could not be completed. Please try again.');
+  }
+  return data;
+}
+
 export function ClientLoginSplitView({
   onClose,
   onSuccess,
@@ -17,7 +32,15 @@ export function ClientLoginSplitView({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [forgotSent, setForgotSent] = useState(false);
+  const [accessMode, setAccessMode] = useState<AccountAccessMode>('login');
+  const [accessName, setAccessName] = useState('');
+  const [accessPhone, setAccessPhone] = useState('');
+  const [accessCompany, setAccessCompany] = useState('');
+  const [accessCode, setAccessCode] = useState('');
+  const [accessPassword, setAccessPassword] = useState('');
+  const [accessBusy, setAccessBusy] = useState(false);
+  const [accessError, setAccessError] = useState('');
+  const [accessNotice, setAccessNotice] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -62,6 +85,69 @@ export function ClientLoginSplitView({
       smoothNavigate('/');
     }
   };
+
+  const changeAccessMode = (mode: AccountAccessMode) => {
+    setAccessMode(mode);
+    setAccessError('');
+    setAccessNotice('');
+    setAccessCode('');
+    setAccessPassword('');
+  };
+
+  const handleAccessSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAccessBusy(true);
+    setAccessError('');
+    setAccessNotice('');
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      if (accessMode === 'signup') {
+        await submitPortalAccessRequest('/api/portal/signup-request', {
+          name: accessName.trim(),
+          email: cleanEmail,
+          phone: accessPhone.trim(),
+          company: accessCompany.trim(),
+        });
+        setAccessNotice('Your request has been submitted. If approved, you will receive a verification code by email.');
+      } else if (accessMode === 'forgot') {
+        await submitPortalAccessRequest('/api/portal/password-reset-request', { email: cleanEmail });
+        setAccessNotice('If an active account matches that email, a reset request has been recorded.');
+      } else {
+        const isSignup = accessMode === 'complete-signup';
+        await submitPortalAccessRequest(
+          isSignup ? '/api/portal/signup/complete' : '/api/portal/password-reset/complete',
+          { email: cleanEmail, code: accessCode.trim(), password: accessPassword },
+        );
+        setEmail(cleanEmail);
+        setPassword('');
+        setAccessMode('login');
+        setAccessNotice(isSignup ? 'Your account is ready. Sign in with your new password.' : 'Your password has been updated. Sign in with your new password.');
+      }
+    } catch (requestError: any) {
+      setAccessError(requestError?.message || 'The request could not be completed. Please try again.');
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  const accessTitle = accessMode === 'login'
+    ? 'Sign In'
+    : accessMode === 'signup'
+      ? 'Request an Account'
+      : accessMode === 'complete-signup'
+        ? 'Complete Registration'
+        : accessMode === 'forgot'
+          ? 'Reset Password'
+          : 'Choose a New Password';
+  const accessDescription = accessMode === 'login'
+    ? 'Enter your email and password to access your account.'
+    : accessMode === 'signup'
+      ? 'Submit your details for review. Approved requests receive a one-time verification code.'
+      : accessMode === 'complete-signup'
+        ? 'Enter the email and six-digit code sent after your registration was approved.'
+        : accessMode === 'forgot'
+          ? 'Request a password reset code. The response will not reveal whether an account exists.'
+          : 'Enter the six-digit code sent by support and choose a new password.';
 
   return (
     <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#0a0b0e] text-white font-sans antialiased overflow-hidden selection:bg-[#0071e3] selection:text-white">
@@ -149,34 +235,27 @@ export function ClientLoginSplitView({
             <span className="text-[11px] font-medium tracking-[0.2em] text-[#0071e3] uppercase">
               Codex Dynamics
             </span>
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white font-display mt-1.5">
-              Sign In
-            </h2>
-            <p className="text-xs sm:text-sm text-white/50 mt-2">
-              Enter your email and password to access your account.
-            </p>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white font-display mt-1.5">{accessTitle}</h2>
+            <p className="text-xs sm:text-sm text-white/50 mt-2">{accessDescription}</p>
           </div>
 
           {/* Error Message */}
-          {error && (
+          {(accessMode === 'login' ? error : accessError) && (
             <div className="mb-5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 text-xs flex items-start gap-2.5">
               <AlertCircle size={16} className="shrink-0 mt-0.5 text-red-400" />
-              <div className="leading-relaxed font-medium">{error}</div>
+              <div className="leading-relaxed font-medium">{accessMode === 'login' ? error : accessError}</div>
             </div>
           )}
 
-          {/* Forgot Password Confirmation */}
-          {forgotSent && (
+          {accessNotice && (
             <div className="mb-5 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-start gap-2.5">
               <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-emerald-400" />
-              <div className="leading-relaxed font-medium">
-                Password recovery instructions have been sent to your email.
-              </div>
+              <div className="leading-relaxed font-medium">{accessNotice}</div>
             </div>
           )}
 
           {/* Sign In Form */}
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
+          {accessMode === 'login' ? <form onSubmit={handleLoginSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-white/80">
                 Email Address
@@ -229,17 +308,59 @@ export function ClientLoginSplitView({
                 </>
               )}
             </button>
-          </form>
+          </form> : <form onSubmit={handleAccessSubmit} className="space-y-4">
+            {accessMode === 'signup' && (
+              <>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-white/80">Full name</label>
+                  <input required value={accessName} onChange={(event) => setAccessName(event.target.value)} className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="name" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-white/80">Phone (optional)</label>
+                  <input value={accessPhone} onChange={(event) => setAccessPhone(event.target.value)} className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="tel" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-white/80">Company (optional)</label>
+                  <input value={accessCompany} onChange={(event) => setAccessCompany(event.target.value)} className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="organization" />
+                </div>
+              </>
+            )}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-white/80">Email Address</label>
+              <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white placeholder-white/25 focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="email" />
+            </div>
+            {(accessMode === 'complete-signup' || accessMode === 'reset') && (
+              <>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-white/80">Six-digit code</label>
+                  <input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={accessCode} onChange={(event) => setAccessCode(event.target.value.replace(/\D/g, '').slice(0, 6))} className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white tracking-[0.3em] focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="one-time-code" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-white/80">New password (8 characters minimum)</label>
+                  <input type="password" required minLength={8} value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.1] focus:border-[#0071e3] rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0071e3]/30" autoComplete="new-password" />
+                </div>
+              </>
+            )}
+            <button type="submit" disabled={accessBusy} className="w-full mt-3 py-3.5 px-5 bg-[#0071e3] hover:bg-[#0077ed] text-white font-medium text-sm rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50">
+              {accessBusy ? 'Please wait…' : accessMode === 'signup' ? 'Submit request' : accessMode === 'forgot' ? 'Request reset code' : accessMode === 'complete-signup' ? 'Activate account' : 'Update password'}
+            </button>
+          </form>}
 
           {/* Assistance Link & Back to Website Link */}
           <div className="mt-6 flex flex-col items-center gap-3 text-xs text-white/45">
-            <button
-              type="button"
-              onClick={() => setForgotSent(true)}
-              className="hover:text-white transition-colors cursor-pointer"
-            >
-              Forgot password?
-            </button>
+            {accessMode === 'login' ? (
+              <>
+                <button type="button" onClick={() => changeAccessMode('forgot')} className="hover:text-white transition-colors cursor-pointer">Forgot password?</button>
+                <button type="button" onClick={() => changeAccessMode('signup')} className="hover:text-white transition-colors cursor-pointer">Request a client account</button>
+              </>
+            ) : accessMode === 'signup' ? (
+              <button type="button" onClick={() => changeAccessMode('complete-signup')} className="hover:text-white transition-colors cursor-pointer">Already approved? Enter your code</button>
+            ) : accessMode === 'forgot' ? (
+              <button type="button" onClick={() => changeAccessMode('reset')} className="hover:text-white transition-colors cursor-pointer">Have a reset code? Enter it</button>
+            ) : null}
+            {accessMode !== 'login' && (
+              <button type="button" onClick={() => changeAccessMode('login')} className="hover:text-white transition-colors cursor-pointer">← Back to sign in</button>
+            )}
 
             <button
               type="button"

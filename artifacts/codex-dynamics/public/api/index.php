@@ -771,6 +771,7 @@ if ($apiPath === '/healthz') {
     jsonResponse([
         'status' => 'ok',
         'database' => $pdo->getAttribute(PDO::ATTR_DRIVER_NAME),
+        'storage_persistent' => $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'sqlite',
     ]);
 }
 
@@ -844,6 +845,127 @@ if ($apiPath === '/crm/leads') {
     jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
+// Public intake for account registration and password resets. These endpoints
+// deliberately return generic responses so they do not disclose account state.
+if ($apiPath === '/portal/signup-request' && $method === 'POST') {
+    $name = trim((string)($input['name'] ?? ''));
+    $email = strtolower(trim((string)($input['email'] ?? '')));
+    if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        jsonResponse(['ok' => false, 'error' => 'Enter your name and a valid email address.'], 422);
+    }
+    $existing = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ?');
+    $existing->execute([$email]);
+    $pending = $pdo->prepare("SELECT id FROM signup_requests WHERE LOWER(email) = ? AND status = 'pending'");
+    $pending->execute([$email]);
+    if (!$existing->fetchColumn() && !$pending->fetchColumn()) {
+        $requestId = 'signup_' . bin2hex(random_bytes(12));
+        $data = [
+            'name' => $name,
+            'email' => $email,
+            'phone' => trim((string)($input['phone'] ?? '')),
+            'company' => trim((string)($input['company'] ?? '')),
+            'country' => trim((string)($input['country'] ?? '')),
+            'country_code' => trim((string)($input['country_code'] ?? $input['countryCode'] ?? '')),
+            'message' => trim((string)($input['message'] ?? '')),
+        ];
+        $pdo->prepare('INSERT INTO signup_requests (id, name, email, request_data, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([$requestId, $name, $email, json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), 'pending', date('c')]);
+    }
+    jsonResponse(['ok' => true, 'message' => 'If eligible, your request has been received for review.'], 202);
+}
+
+if ($apiPath === '/portal/signup/complete' && $method === 'POST') {
+    $email = strtolower(trim((string)($input['email'] ?? '')));
+    $code = trim((string)($input['verification_code'] ?? $input['code'] ?? ''));
+    $password = (string)($input['password'] ?? '');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 8 || strlen($password) > 4096) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a valid email address and a password of at least 8 characters.'], 422);
+    }
+    $request = $pdo->prepare("SELECT * FROM signup_requests WHERE LOWER(email) = ? AND status = 'approved' ORDER BY reviewed_at DESC");
+    $request->execute([$email]);
+    $signup = $request->fetch();
+    if (!$signup || empty($signup['verification_code_hash']) || strtotime((string)$signup['verification_expires_at']) <= time()) {
+        jsonResponse(['ok' => false, 'error' => 'The verification code is invalid or expired.'], 400);
+    }
+    if ((int)$signup['verification_attempts'] >= 5) {
+        jsonResponse(['ok' => false, 'error' => 'Too many attempts. Request a new verification code.'], 429);
+    }
+    if (!password_verify($code, (string)$signup['verification_code_hash'])) {
+        $pdo->prepare('UPDATE signup_requests SET verification_attempts = verification_attempts + 1 WHERE id = ?')->execute([$signup['id']]);
+        jsonResponse(['ok' => false, 'error' => 'The verification code is invalid or expired.'], 400);
+    }
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+    if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the password.'], 500);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE portal_clients SET password = ?, portal_enabled = 1 WHERE id = ?')
+            ->execute([$passwordHash, $signup['client_id']]);
+        $pdo->prepare('UPDATE signup_requests SET verification_code_hash = NULL, verification_expires_at = NULL WHERE id = ?')
+            ->execute([$signup['id']]);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'message' => 'Your client account is ready. You can now sign in.']);
+}
+
+if ($apiPath === '/portal/password-reset-request' && $method === 'POST') {
+    $email = strtolower(trim((string)($input['email'] ?? '')));
+    if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $client = $pdo->prepare("SELECT id FROM portal_clients WHERE LOWER(email) = ? AND status = 'Active' AND portal_enabled = 1");
+        $client->execute([$email]);
+        $userId = $client->fetchColumn();
+        if ($userId) {
+            $now = date('c');
+            $exists = $pdo->prepare('SELECT user_id FROM password_reset_requests WHERE user_id = ?');
+            $exists->execute([$userId]);
+            if ($exists->fetchColumn()) {
+                $pdo->prepare("UPDATE password_reset_requests SET requested_at = ?, status = 'pending', code_hash = NULL, expires_at = NULL, sent_at = NULL, attempt_count = 0 WHERE user_id = ?")
+                    ->execute([$now, $userId]);
+            } else {
+                $pdo->prepare("INSERT INTO password_reset_requests (user_id, requested_at, status) VALUES (?, ?, 'pending')")
+                    ->execute([$userId, $now]);
+            }
+        }
+    }
+    jsonResponse(['ok' => true, 'message' => 'If an active account matches that email, a reset request has been recorded.'], 202);
+}
+
+if ($apiPath === '/portal/password-reset/complete' && $method === 'POST') {
+    $email = strtolower(trim((string)($input['email'] ?? '')));
+    $code = trim((string)($input['code'] ?? ''));
+    $password = (string)($input['password'] ?? '');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 8 || strlen($password) > 4096) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a valid email address and a password of at least 8 characters.'], 422);
+    }
+    $stmt = $pdo->prepare("SELECT c.id, r.code_hash, r.expires_at, r.attempt_count FROM portal_clients c JOIN password_reset_requests r ON r.user_id = c.id WHERE LOWER(c.email) = ? AND r.status = 'sent'");
+    $stmt->execute([$email]);
+    $reset = $stmt->fetch();
+    if (!$reset || empty($reset['code_hash']) || strtotime((string)$reset['expires_at']) <= time()) {
+        jsonResponse(['ok' => false, 'error' => 'The reset code is invalid or expired.'], 400);
+    }
+    if ((int)$reset['attempt_count'] >= 5) {
+        jsonResponse(['ok' => false, 'error' => 'Too many attempts. Request a new reset code.'], 429);
+    }
+    if (!password_verify($code, (string)$reset['code_hash'])) {
+        $pdo->prepare('UPDATE password_reset_requests SET attempt_count = attempt_count + 1 WHERE user_id = ?')->execute([$reset['id']]);
+        jsonResponse(['ok' => false, 'error' => 'The reset code is invalid or expired.'], 400);
+    }
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+    if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the password.'], 500);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $reset['id']]);
+        $pdo->prepare('DELETE FROM password_reset_requests WHERE user_id = ?')->execute([$reset['id']]);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'message' => 'Your password has been updated.']);
+}
+
 // -----------------------------------------------------------------------------
 // 2a. ADMIN LEADS (authenticated list, search, create, edit, soft delete)
 // -----------------------------------------------------------------------------
@@ -853,7 +975,8 @@ $isAdminLeadCollection = $apiPath === '/admin/leads';
 $isAdminLeadImport = $apiPath === '/admin/leads/import';
 $isAdminLeadSearch = $apiPath === '/admin/leads/search';
 $isAdminLeadRestore = preg_match('#^/admin/leads/([^/]+)/restore$#', $apiPath, $adminLeadRestoreMatch) === 1;
-$isAdminLeadResource = !$isAdminLeadImport && preg_match('#^/admin/leads/([^/]+)$#', $apiPath, $adminLeadResourceMatch) === 1;
+$isAdminLeadResource = preg_match('#^/admin/leads/([^/]+)$#', $apiPath, $adminLeadResourceMatch) === 1
+    && !in_array($adminLeadResourceMatch[1], ['import', 'search', 'assign-bulk', 'bulk-assign', 'bulk-status', 'bin'], true);
 
 if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdminLeadRestore || $isAdminLeadResource) {
     $adminStmt = $pdo->prepare("SELECT role, office_id, team_id, status, name FROM staff_users WHERE id = ?");
@@ -2564,7 +2687,7 @@ if ($apiPath === '/admin/staff') {
     }
     if ($method === 'POST') {
         $role = trim((string)($input['role'] ?? 'Agent'));
-        if (!in_array($role, ['Office Manager', 'Team Leader', 'Agent'], true)) {
+        if (!in_array($role, ['Office Manager', 'Team Leader', 'Agent', 'Super Admin'], true)) {
             jsonResponse(['ok' => false, 'error' => 'This role cannot be created through staff management.'], 422);
         }
         $name = trim((string)($input['name'] ?? ''));
@@ -2572,7 +2695,13 @@ if ($apiPath === '/admin/staff') {
         if ($name === '' || strlen($password) < 8) jsonResponse(['ok' => false, 'error' => 'A name and a password of at least 8 characters are required.'], 422);
         $officeId = optionalId($input['office_id'] ?? null);
         $teamId = optionalId($input['team_id'] ?? null);
-        if ($actor['role'] === 'Office Manager') {
+        if ($role === 'Super Admin' && $actor['role'] !== 'Super Admin') {
+            jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can create another Super Admin.'], 403);
+        } elseif ($role === 'Super Admin') {
+            if ($officeId !== null || $teamId !== null) jsonResponse(['ok' => false, 'error' => 'A Super Admin cannot be assigned to an office or team.'], 422);
+            $officeId = null;
+            $teamId = null;
+        } elseif ($actor['role'] === 'Office Manager') {
             if (!in_array($role, ['Team Leader', 'Agent'], true)) jsonResponse(['ok' => false, 'error' => 'Office Managers can only create Team Leaders and Agents.'], 403);
             $officeId = optionalId($actor['office_id'] ?? null);
             if ($officeId === null) jsonResponse(['ok' => false, 'error' => 'Your account is not assigned to an office.'], 403);
@@ -2605,6 +2734,9 @@ if ($apiPath === '/admin/staff') {
             if ((int)$q->fetchColumn() >= (int)$team['max_size']) jsonResponse(['ok' => false, 'error' => 'This team is at capacity.'], 409);
         }
         $email = strtolower(trim((string)($input['email'] ?? '')));
+        if ($role === 'Super Admin' && $email === '') {
+            jsonResponse(['ok' => false, 'error' => 'A valid email address is required for a Super Admin account.'], 422);
+        }
         $id = 'adm_' . bin2hex(random_bytes(8));
         $email = $email ?: strtolower($role === 'Agent' ? 'agent_' : ($role === 'Team Leader' ? 'leader_' : 'manager_')) . substr($id, 4) . '@codexdynamics.com';
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 422);
@@ -2757,6 +2889,20 @@ if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
     $q->execute([$staffId]);
     $target = $q->fetch();
     if (!$target) jsonResponse(['ok' => false, 'error' => 'Staff member not found.'], 404);
+
+    if ($target['role'] === 'Super Admin'
+        && (($method === 'DELETE') || ($action === 'block' && $method === 'POST'))) {
+        if ($actor['id'] === $staffId && $method === 'DELETE') {
+            jsonResponse(['ok' => false, 'error' => 'You cannot delete your own Super Admin account.'], 409);
+        }
+        if ($action === 'block' && $actor['id'] === $staffId) {
+            jsonResponse(['ok' => false, 'error' => 'You cannot suspend your own Super Admin account.'], 409);
+        }
+        $activeSuperAdmins = (int)$pdo->query("SELECT COUNT(*) FROM staff_users WHERE role = 'Super Admin' AND status = 'Active' AND deleted_at IS NULL")->fetchColumn();
+        if ($target['status'] === 'Active' && $activeSuperAdmins <= 1) {
+            jsonResponse(['ok' => false, 'error' => 'At least one active Super Admin account must remain.'], 409);
+        }
+    }
 
     if (($action === 'block' || $action === 'unblock') && $method === 'POST') {
         if (!canManageStaffStatus($actor, $target)) jsonResponse(['ok' => false, 'error' => 'You cannot change this staff member’s access.'], 403);
@@ -3020,6 +3166,327 @@ if (preg_match('#^/admin/leads/([^/]+)/assign$#', $apiPath, $m) && $method === '
         throw $error;
     }
     jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($updated)]);
+}
+
+// Admin lead actions called by the bulk toolbar and lead profile dialogs.
+if ($apiPath === '/admin/leads/bulk-status' && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can bulk-update lead status.'], 403);
+    $ids = $input['ids'] ?? [];
+    $status = trim((string)($input['status'] ?? ''));
+    $allowedStatuses = ['Active', 'Suspended', 'Disabled', 'New', 'In Line', 'No Answer', 'Deposit', 'Failed Deposit', 'Didn\'t Register', 'Not Interested', 'Low Potential', 'NA1', 'NA2', 'NA3', 'Never Answer', 'No Potential', 'Wrong Person', 'Wrong Number', 'Call Back'];
+    if (!is_array($ids) || count($ids) === 0 || count($ids) > 5000 || !in_array($status, $allowedStatuses, true)) {
+        jsonResponse(['ok' => false, 'error' => 'Provide selected lead IDs and a valid status.'], 422);
+    }
+    $ids = array_values(array_unique(array_filter(array_map(static fn($id) => trim((string)$id), $ids))));
+    $pdo->beginTransaction();
+    try {
+        $update = $pdo->prepare('UPDATE leads SET status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL');
+        $updated = [];
+        foreach ($ids as $id) {
+            $update->execute([$status, date('c'), $id]);
+            if ($update->rowCount() > 0) $updated[] = $id;
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+    jsonResponse(['ok' => true, 'updated' => count($updated), 'ids' => $updated]);
+}
+
+if (preg_match('#^/admin/leads/([^/]+)/(reset-status|comments|status-history)(?:/([^/]+))?$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    $leadId = rawurldecode($m[1]);
+    $action = $m[2];
+    $entryId = isset($m[3]) ? rawurldecode($m[3]) : null;
+    if ($method === 'POST' && $action === 'reset-status') {
+        $lead = requireVisibleLead($pdo, $actor, $leadId);
+        $history = json_decode((string)($lead['status_history'] ?? '[]'), true);
+        if (!is_array($history)) $history = [];
+        $history[] = [
+            'id' => 'st_' . bin2hex(random_bytes(5)),
+            'from_stage' => (string)($lead['stage'] ?? ''),
+            'to_stage' => 'New',
+            'by_admin_id' => $actor['id'],
+            'by_name' => $actor['name'],
+            'created_at' => date('c'),
+        ];
+        $pdo->prepare('UPDATE leads SET stage = ?, status = ?, status_history = ?, updated_at = ? WHERE id = ?')
+            ->execute(['New', 'New', json_encode($history, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), date('c'), $leadId]);
+    } elseif ($method === 'DELETE' && $action === 'comments') {
+        $lead = requireVisibleLead($pdo, $actor, $leadId);
+        if ($entryId === null) {
+            $pdo->prepare('UPDATE leads SET comment_history = ?, updated_at = ? WHERE id = ?')
+                ->execute(['[]', date('c'), $leadId]);
+        } else {
+            $comments = json_decode((string)($lead['comment_history'] ?? '[]'), true);
+            if (!is_array($comments)) $comments = [];
+            $comments = array_values(array_filter($comments, static fn($comment) =>
+                !is_array($comment) || (string)($comment['id'] ?? $comment['comment_id'] ?? '') !== $entryId
+            ));
+            $pdo->prepare('UPDATE leads SET comment_history = ?, updated_at = ? WHERE id = ?')
+                ->execute([json_encode($comments, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), date('c'), $leadId]);
+        }
+    } elseif ($method === 'DELETE' && $action === 'status-history' && $entryId !== null) {
+        $lead = requireVisibleLead($pdo, $actor, $leadId);
+        $history = json_decode((string)($lead['status_history'] ?? '[]'), true);
+        if (!is_array($history)) $history = [];
+        $history = array_values(array_filter($history, static fn($entry) =>
+            !is_array($entry) || (string)($entry['id'] ?? '') !== $entryId
+        ));
+        $pdo->prepare('UPDATE leads SET status_history = ?, updated_at = ? WHERE id = ?')
+            ->execute([json_encode($history, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), date('c'), $leadId]);
+    } else {
+        jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    }
+    $updatedLead = $pdo->prepare('SELECT * FROM leads WHERE id = ?');
+    $updatedLead->execute([$leadId]);
+    jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($updatedLead->fetch() ?: [])]);
+}
+
+if ($apiPath === '/admin/leads/bin/cleanup' && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can clean up the recycle bin.'], 403);
+    $days = filter_var($input['older_than_days'] ?? 30, FILTER_VALIDATE_INT);
+    if ($days === false || $days < 1 || $days > 3650) jsonResponse(['ok' => false, 'error' => 'The cleanup age must be between 1 and 3,650 days.'], 422);
+    $cutoff = date('c', time() - ($days * 86400));
+    $q = $pdo->prepare('SELECT id FROM leads WHERE deleted_at IS NOT NULL AND deleted_at < ?');
+    $q->execute([$cutoff]);
+    $ids = array_map('strval', $q->fetchAll(PDO::FETCH_COLUMN));
+    if ($ids) {
+        $pdo->beginTransaction();
+        try {
+            $assignmentHistory = $pdo->prepare('DELETE FROM lead_assignment_history WHERE lead_id = ?');
+            $deleteLead = $pdo->prepare('DELETE FROM leads WHERE id = ? AND deleted_at IS NOT NULL');
+            foreach ($ids as $id) {
+                $assignmentHistory->execute([$id]);
+                $deleteLead->execute([$id]);
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+    }
+    jsonResponse(['ok' => true, 'deleted' => count($ids), 'ids' => $ids]);
+}
+
+if ($apiPath === '/admin/leads/bin/purge-all' && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can permanently purge the recycle bin.'], 403);
+    $requestedIds = $input['ids'] ?? [];
+    if (!is_array($requestedIds) || count($requestedIds) > 5000) jsonResponse(['ok' => false, 'error' => 'Provide a valid list of lead IDs.'], 422);
+    if ($requestedIds) {
+        $requestedIds = array_values(array_unique(array_filter(array_map(static fn($id) => trim((string)$id), $requestedIds))));
+        $placeholders = implode(',', array_fill(0, count($requestedIds), '?'));
+        $q = $pdo->prepare("SELECT id FROM leads WHERE deleted_at IS NOT NULL AND id IN ({$placeholders})");
+        $q->execute($requestedIds);
+    } else {
+        $q = $pdo->query('SELECT id FROM leads WHERE deleted_at IS NOT NULL');
+    }
+    $ids = array_map('strval', $q->fetchAll(PDO::FETCH_COLUMN));
+    if ($ids) {
+        $pdo->beginTransaction();
+        try {
+            $assignmentHistory = $pdo->prepare('DELETE FROM lead_assignment_history WHERE lead_id = ?');
+            $deleteLead = $pdo->prepare('DELETE FROM leads WHERE id = ? AND deleted_at IS NOT NULL');
+            foreach ($ids as $id) {
+                $assignmentHistory->execute([$id]);
+                $deleteLead->execute([$id]);
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+    }
+    jsonResponse(['ok' => true, 'deleted' => count($ids), 'ids' => $ids]);
+}
+
+// Registration and password-reset queues used by the Super Admin tools.
+if ($apiPath === '/admin/signup-requests') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage signup requests.'], 403);
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $status = trim((string)($_GET['status'] ?? 'pending'));
+    if ($status === 'all') {
+        $rows = $pdo->query('SELECT * FROM signup_requests ORDER BY created_at DESC')->fetchAll();
+    } else {
+        $stmt = $pdo->prepare('SELECT * FROM signup_requests WHERE status = ? ORDER BY created_at DESC');
+        $stmt->execute([$status]);
+        $rows = $stmt->fetchAll();
+    }
+    $items = [];
+    foreach ($rows as $row) {
+        $details = json_decode((string)$row['request_data'], true);
+        if (!is_array($details)) $details = [];
+        $items[] = array_merge($details, [
+            'id' => $row['id'],
+            'name' => $row['name'],
+            'email' => $row['email'],
+            'status' => $row['status'],
+            'createdAt' => $row['created_at'],
+        ]);
+    }
+    jsonResponse(['ok' => true, 'items' => $items, 'total' => count($items)]);
+}
+
+if (preg_match('#^/admin/signup-requests/([^/]+)(?:/(approve|reject))?$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage signup requests.'], 403);
+    $requestId = rawurldecode($m[1]);
+    $action = $m[2] ?? '';
+    $q = $pdo->prepare('SELECT * FROM signup_requests WHERE id = ?');
+    $q->execute([$requestId]);
+    $request = $q->fetch();
+    if (!$request) jsonResponse(['ok' => false, 'error' => 'Signup request not found.'], 404);
+    if ($method === 'DELETE' && $action === '') {
+        $pdo->prepare('DELETE FROM signup_requests WHERE id = ?')->execute([$requestId]);
+        jsonResponse(['ok' => true, 'id' => $requestId, 'deleted' => true]);
+    }
+    if ($method === 'POST' && $action === 'reject') {
+        $reason = trim((string)($input['reason'] ?? ''));
+        $code = trim((string)($input['code'] ?? ''));
+        $pdo->prepare("UPDATE signup_requests SET status = 'rejected', rejection_reason = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'")
+            ->execute([$reason !== '' ? $reason : $code, date('c'), $requestId]);
+        jsonResponse(['ok' => true, 'id' => $requestId, 'status' => 'rejected']);
+    }
+    if ($method === 'POST' && $action === 'approve') {
+        if ($request['status'] !== 'pending') jsonResponse(['ok' => false, 'error' => 'This request has already been reviewed.'], 409);
+        $code = trim((string)($input['verification_code'] ?? $input['verificationCode'] ?? ''));
+        if (!preg_match('/^\d{6}$/', $code)) jsonResponse(['ok' => false, 'error' => 'Enter a six-digit verification code.'], 422);
+        $data = json_decode((string)$request['request_data'], true);
+        if (!is_array($data)) jsonResponse(['ok' => false, 'error' => 'Signup request data is invalid.'], 422);
+        $email = strtolower(trim((string)$request['email']));
+        $existingClient = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ?');
+        $existingClient->execute([$email]);
+        if ($existingClient->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'A client account already uses this email address.'], 409);
+        $assignment = validateLeadAssignment($pdo, [
+            'office_id' => $input['assigned_office_id'] ?? $input['office_id'] ?? null,
+            'team_id' => $input['assigned_team_id'] ?? $input['team_id'] ?? null,
+            'team_leader_id' => $input['assigned_team_leader_id'] ?? null,
+            'agent_id' => $input['agent_id'] ?? $input['assigned_agent_id'] ?? null,
+        ]);
+        assertCanAssignLead($actor, $assignment, $pdo);
+        $clientId = 'client_' . bin2hex(random_bytes(10));
+        $leadId = 'ld_signup_' . bin2hex(random_bytes(10));
+        $now = date('c');
+        $name = trim((string)($data['name'] ?? $request['name']));
+        $parts = preg_split('/\s+/', $name, 2) ?: [$name, ''];
+        $firstName = (string)($parts[0] ?? '');
+        $lastName = (string)($parts[1] ?? '');
+        $existingLeadStmt = $pdo->prepare('SELECT * FROM leads WHERE LOWER(email) = ? AND deleted_at IS NULL ORDER BY created_at ASC');
+        $existingLeadStmt->execute([$email]);
+        $existingLead = $existingLeadStmt->fetch();
+        $pdo->beginTransaction();
+        try {
+            if ($existingLead) {
+                $leadId = (string)$existingLead['id'];
+                if (array_filter($assignment, static fn($value) => $value !== null)) {
+                    $lead = saveLeadAssignment($pdo, $leadId, $assignment, $actor);
+                } else {
+                    $lead = $existingLead;
+                }
+            } else {
+                $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, company, message, source, stage, status, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, assigned_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'signup_request', 'New', 'New', ?, ?, ?, ?, ?, ?, ?)")
+                    ->execute([
+                        $leadId, $firstName, $lastName, $name, $email,
+                        trim((string)($data['phone'] ?? '')),
+                        trim((string)($data['country'] ?? '')),
+                        trim((string)($data['country_code'] ?? '')),
+                        trim((string)($data['company'] ?? '')),
+                        trim((string)($data['message'] ?? '')),
+                        $assignment['office_id'], $assignment['team_id'], $assignment['team_leader_id'], $assignment['agent_id'],
+                        $actor['id'], $now, $now,
+                    ]);
+                $leadQuery = $pdo->prepare('SELECT * FROM leads WHERE id = ?');
+                $leadQuery->execute([$leadId]);
+                $lead = $leadQuery->fetch() ?: [];
+            }
+            $pdo->prepare("INSERT INTO portal_clients (id, name, company, email, password, phone, country, country_code, status, portal_enabled, created_at) VALUES (?, ?, ?, ?, '', ?, ?, ?, 'Active', 0, ?)")
+                ->execute([
+                    $clientId, $name, trim((string)($data['company'] ?? '')), $email,
+                    trim((string)($data['phone'] ?? '')), trim((string)($data['country'] ?? '')),
+                    trim((string)($data['country_code'] ?? '')), $now,
+                ]);
+            $pdo->prepare("UPDATE signup_requests SET status = 'approved', verification_code_hash = ?, verification_expires_at = ?, verification_attempts = 0, client_id = ?, lead_id = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'")
+                ->execute([password_hash($code, PASSWORD_DEFAULT), date('c', time() + 3600), $clientId, $leadId, $now, $requestId]);
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($lead)]);
+    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+}
+
+if ($apiPath === '/admin/password-reset-requests') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage password-reset requests.'], 403);
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $rows = $pdo->query("SELECT c.id, c.name AS user_name, c.email AS user_email, r.requested_at FROM password_reset_requests r JOIN portal_clients c ON c.id = r.user_id WHERE r.status = 'pending' AND c.status = 'Active' AND c.portal_enabled = 1 ORDER BY r.requested_at ASC")->fetchAll();
+    foreach ($rows as &$row) $row['id'] = $row['id'];
+    unset($row);
+    jsonResponse(['ok' => true, 'items' => $rows]);
+}
+
+if (preg_match('#^/admin/password-reset-requests/([^/]+)/send-code$#', $apiPath, $m) && $method === 'POST') {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can send password-reset codes.'], 403);
+    $userId = rawurldecode($m[1]);
+    $code = trim((string)($input['code'] ?? ''));
+    if (!preg_match('/^\d{6}$/', $code)) jsonResponse(['ok' => false, 'error' => 'Enter a six-digit reset code.'], 422);
+    $stmt = $pdo->prepare("SELECT user_id FROM password_reset_requests WHERE user_id = ? AND status = 'pending'");
+    $stmt->execute([$userId]);
+    if (!$stmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Pending password-reset request not found.'], 404);
+    $now = date('c');
+    $pdo->prepare("UPDATE password_reset_requests SET status = 'sent', code_hash = ?, expires_at = ?, sent_at = ?, attempt_count = 0 WHERE user_id = ?")
+        ->execute([password_hash($code, PASSWORD_DEFAULT), date('c', time() + 3600), $now, $userId]);
+    jsonResponse(['ok' => true, 'user_id' => $userId, 'expires_at' => date('c', time() + 3600)]);
+}
+
+if ($apiPath === '/admin/pending-counts' && $method === 'GET') {
+    requireActiveAdminStaff($pdo, $adminSession);
+    $signups = (int)$pdo->query("SELECT COUNT(*) FROM signup_requests WHERE status = 'pending'")->fetchColumn();
+    $resets = (int)$pdo->query("SELECT COUNT(*) FROM password_reset_requests WHERE status = 'pending'")->fetchColumn();
+    jsonResponse(['ok' => true, 'signups' => $signups, 'password_resets' => $resets]);
+}
+
+if (preg_match('#^/admin/client-workspaces/([^/]+)$#', $apiPath, $m)) {
+    $actor = requireActiveAdminStaff($pdo, $adminSession);
+    if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage client workspaces.'], 403);
+    $userId = rawurldecode($m[1]);
+    $clientStmt = $pdo->prepare('SELECT id FROM portal_clients WHERE id = ?');
+    $clientStmt->execute([$userId]);
+    if (!$clientStmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Client account not found.'], 404);
+    if ($method === 'GET') {
+        $workspaceStmt = $pdo->prepare('SELECT workspace_json FROM client_workspaces WHERE user_id = ?');
+        $workspaceStmt->execute([$userId]);
+        $raw = $workspaceStmt->fetchColumn();
+        $workspace = $raw === false ? null : json_decode((string)$raw, true);
+        if ($raw !== false && !is_array($workspace)) jsonResponse(['ok' => false, 'error' => 'Stored client workspace data is invalid.'], 500);
+        jsonResponse(['ok' => true, 'workspace' => $workspace]);
+    }
+    if ($method === 'PUT') {
+        if (!is_array($input) || strlen(json_encode($input) ?: '') > 1048576) {
+            jsonResponse(['ok' => false, 'error' => 'Workspace data must be a JSON object under 1 MB.'], 422);
+        }
+        $json = json_encode($input, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) jsonResponse(['ok' => false, 'error' => 'Workspace data could not be encoded.'], 422);
+        $exists = $pdo->prepare('SELECT user_id FROM client_workspaces WHERE user_id = ?');
+        $exists->execute([$userId]);
+        if ($exists->fetchColumn()) {
+            $pdo->prepare('UPDATE client_workspaces SET workspace_json = ?, updated_at = ? WHERE user_id = ?')
+                ->execute([$json, date('c'), $userId]);
+        } else {
+            $pdo->prepare('INSERT INTO client_workspaces (user_id, workspace_json, updated_at) VALUES (?, ?, ?)')
+                ->execute([$userId, $json, date('c')]);
+        }
+        jsonResponse(['ok' => true, 'workspace' => $input]);
+    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
 // -----------------------------------------------------------------------------

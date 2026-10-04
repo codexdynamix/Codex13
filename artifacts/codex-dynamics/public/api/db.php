@@ -45,7 +45,13 @@ function getDb(): PDO {
         if (isset($cfg['db_pass'])) $dbPass = $cfg['db_pass'];
     }
 
-    if ($dbHost && $dbName && $dbUser) {
+    $hasMysqlConfig = $dbHost && $dbName && $dbUser;
+    if (!$hasMysqlConfig && getenv('NODE_ENV') === 'production') {
+        error_log('Production database configuration is missing; refusing to create a local SQLite database.');
+        throw new RuntimeException('Production requires DB_HOST, DB_NAME, and DB_USER. SQLite fallback is disabled.');
+    }
+
+    if ($hasMysqlConfig) {
         // MySQL connection
         $dsn = "mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4";
         $pdo = new PDO($dsn, $dbUser, $dbPass, [
@@ -54,9 +60,7 @@ function getDb(): PDO {
             PDO::ATTR_EMULATE_PREPARES => false,
         ]);
     } else {
-        // SQLite fallback - zero-config for Hostinger
-        // Keep the database outside the public document root. The API directory
-        // lives under public/api, so walking up two levels reaches the artifact root.
+        // Local development fallback. Production must use a configured persistent database.
         $dataDir = dirname(__DIR__, 2) . '/data';
         if (!is_dir($dataDir)) {
             @mkdir($dataDir, 0755, true);
@@ -665,6 +669,35 @@ function initSchema(PDO $pdo): void {
             is_typing INTEGER NOT NULL DEFAULT 0,
             last_seen_at TEXT NOT NULL,
             PRIMARY KEY (client_id, actor_type, actor_id)
+        );
+        CREATE TABLE IF NOT EXISTS signup_requests (
+            id VARCHAR(128) PRIMARY KEY,
+            name TEXT NOT NULL,
+            email VARCHAR(255) NOT NULL,
+            request_data TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+            rejection_reason TEXT,
+            verification_code_hash TEXT,
+            verification_expires_at TEXT,
+            verification_attempts INTEGER NOT NULL DEFAULT 0,
+            client_id VARCHAR(128),
+            lead_id VARCHAR(128),
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS password_reset_requests (
+            user_id VARCHAR(128) PRIMARY KEY,
+            requested_at TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+            code_hash TEXT,
+            expires_at TEXT,
+            sent_at TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS client_workspaces (
+            user_id VARCHAR(128) PRIMARY KEY,
+            workspace_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
     ");
     ensureDatabaseColumn($pdo, 'admin_sessions', 'last_seen_at', 'TEXT NULL');
