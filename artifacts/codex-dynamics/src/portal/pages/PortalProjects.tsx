@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Briefcase,
   CheckCircle2,
@@ -21,14 +21,48 @@ interface PortalProjectsProps {
 }
 
 export function PortalProjects({ client, onNavigate }: PortalProjectsProps) {
-  const projects = portalDb.getProjects(client.id);
-  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(
-    projects[0]?.id || null
-  );
-  const [approvedMilestones, setApprovedMilestones] = useState<Record<string, boolean>>({});
+  const [projects, setProjects] = useState<ClientProject[]>([]);
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [approvalError, setApprovalError] = useState('');
+  const [savingMilestoneKey, setSavingMilestoneKey] = useState('');
 
-  const handleApprove = (milestoneId: string) => {
-    setApprovedMilestones((prev) => ({ ...prev, [milestoneId]: true }));
+  useEffect(() => {
+    let active = true;
+    setProjects([]);
+    setExpandedProjectId(null);
+    setIsLoading(true);
+    setLoadError('');
+    void portalDb.syncWithServer(client.id)
+      .then(() => {
+        if (!active) return;
+        const currentProjects = portalDb.getProjects(client.id);
+        setProjects(currentProjects);
+        setExpandedProjectId(currentProjects[0]?.id || null);
+      })
+      .catch((error) => {
+        if (active) setLoadError(error instanceof Error ? error.message : 'Projects could not be loaded.');
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => { active = false; };
+  }, [client.id]);
+
+  const handleApprove = async (projectId: string, milestoneId: string) => {
+    const key = `${projectId}:${milestoneId}`;
+    if (savingMilestoneKey) return;
+    setSavingMilestoneKey(key);
+    setApprovalError('');
+    try {
+      const updatedProject = await portalDb.approveProjectMilestone(client.id, projectId, milestoneId);
+      setProjects((current) => current.map((project) => project.id === updatedProject.id ? updatedProject : project));
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : 'Milestone approval could not be saved.');
+    } finally {
+      setSavingMilestoneKey('');
+    }
   };
 
   return (
@@ -56,7 +90,13 @@ export function PortalProjects({ client, onNavigate }: PortalProjectsProps) {
         </button>
       </div>
 
-      {projects.length === 0 ? (
+      {loadError && <div role="alert" data-testid="status-portal-project-load-error" className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-700 dark:text-red-300">{loadError}</div>}
+      {approvalError && <div role="alert" data-testid="status-milestone-approval-error" className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-700 dark:text-red-300">{approvalError}</div>}
+      {isLoading ? (
+        <div role="status" aria-busy="true" data-testid="status-portal-projects-loading" className="rounded-3xl border border-black/[0.06] bg-white p-8 text-center text-sm text-[#86868B] dark:border-white/[0.08] dark:bg-[#1C1C1E]">
+          Loading your projects…
+        </div>
+      ) : projects.length === 0 ? (
         <div className="p-16 text-center bg-white dark:bg-[#1C1C1E] border border-dashed border-black/[0.08] dark:border-white/[0.1] rounded-3xl">
           <Briefcase size={40} className="text-[#86868B] mx-auto mb-3" />
           <h3 className="text-base font-semibold text-[#1D1D1F] dark:text-white">No active projects assigned yet</h3>
@@ -127,7 +167,8 @@ export function PortalProjects({ client, onNavigate }: PortalProjectsProps) {
 
                       <div className="space-y-3">
                         {proj.milestones.map((m, idx) => {
-                          const isApproved = approvedMilestones[m.id];
+                          const isApproved = Boolean(m.clientApproved);
+                          const isSaving = savingMilestoneKey === `${proj.id}:${m.id}`;
                           return (
                             <div
                               key={m.id}
@@ -178,11 +219,13 @@ export function PortalProjects({ client, onNavigate }: PortalProjectsProps) {
                                   </span>
                                 ) : (
                                   <button
-                                    onClick={() => handleApprove(m.id)}
-                                    className="px-3.5 py-1.5 rounded-xl bg-[#0071E3] hover:bg-[#0077ED] text-white text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs"
+                                    onClick={() => void handleApprove(proj.id, m.id)}
+                                    disabled={Boolean(savingMilestoneKey)}
+                                    data-testid={`button-approve-milestone-${proj.id}-${m.id}`}
+                                    className="px-3.5 py-1.5 rounded-xl bg-[#0071E3] hover:bg-[#0077ED] disabled:opacity-60 disabled:cursor-wait text-white text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs"
                                   >
                                     <ThumbsUp size={12} />
-                                    <span>Approve Milestone</span>
+                                    <span>{isSaving ? 'Saving…' : 'Approve Milestone'}</span>
                                   </button>
                                 )}
                               </div>

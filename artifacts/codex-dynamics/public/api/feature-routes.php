@@ -294,6 +294,56 @@ function codexFeatureHandleBlogCategories(PDO $pdo, string $apiPath, string $met
     jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
+function codexFeatureHandlePortalMilestoneApproval(PDO $pdo, string $apiPath, string $method, ?array $portalSession): bool
+{
+    if (!preg_match('#^/portal/projects/([^/]+)/milestones/([^/]+)/approve$#', $apiPath, $match)) return false;
+    if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    if (!$portalSession) jsonResponse(['ok' => false, 'error' => 'Client sign-in required.'], 401);
+
+    $clientId = (string)$portalSession['id'];
+    $projectId = rawurldecode($match[1]);
+    $milestoneId = rawurldecode($match[2]);
+    $projectQuery = $pdo->prepare('SELECT p.* FROM client_projects p
+        INNER JOIN clients c ON c.id = p.client_id
+        WHERE p.id = ? AND p.client_id = ? AND p.deleted_at IS NULL
+            AND c.deleted_at IS NULL AND c.merged_into_client_id IS NULL');
+    $projectQuery->execute([$projectId, $clientId]);
+    $project = $projectQuery->fetch();
+    if (!$project) jsonResponse(['ok' => false, 'error' => 'Client project not found.'], 404);
+
+    $milestones = codexFeatureJsonArray($project['milestones'] ?? null);
+    $milestoneIndex = null;
+    foreach ($milestones as $index => $milestone) {
+        if (is_array($milestone) && (string)($milestone['id'] ?? '') === $milestoneId) {
+            $milestoneIndex = $index;
+            break;
+        }
+    }
+    if ($milestoneIndex === null) jsonResponse(['ok' => false, 'error' => 'Project milestone not found.'], 404);
+
+    $milestone = $milestones[$milestoneIndex];
+    if (!empty($milestone['clientApproved'])) {
+        $project['milestones'] = $milestones;
+        jsonResponse(['ok' => true, 'project' => codexFeatureNormalizeProject($project)]);
+    }
+    if (strtolower(trim((string)($milestone['status'] ?? ''))) === 'completed') {
+        jsonResponse(['ok' => false, 'error' => 'A completed milestone cannot be approved again.'], 409);
+    }
+
+    $milestone['clientApproved'] = true;
+    $milestone['clientApprovedAt'] = date('c');
+    $milestones[$milestoneIndex] = $milestone;
+    $pdo->prepare('UPDATE client_projects SET milestones = ?, updated_at = ?
+        WHERE id = ? AND client_id = ? AND deleted_at IS NULL')
+        ->execute([json_encode($milestones), date('c'), $projectId, $clientId]);
+
+    $updatedQuery = $pdo->prepare('SELECT * FROM client_projects WHERE id = ? AND client_id = ? AND deleted_at IS NULL');
+    $updatedQuery->execute([$projectId, $clientId]);
+    $updatedProject = $updatedQuery->fetch();
+    if (!$updatedProject) jsonResponse(['ok' => false, 'error' => 'Client project could not be reloaded.'], 500);
+    jsonResponse(['ok' => true, 'project' => codexFeatureNormalizeProject($updatedProject)]);
+}
+
 function codexFeatureHandleClientProjects(PDO $pdo, string $apiPath, string $method, array $input, ?array $adminSession): bool
 {
     if ($apiPath === '/admin/client-projects') {
@@ -967,6 +1017,7 @@ function codexFeatureHandleWebhook(PDO $pdo, string $apiPath, string $method, ar
 
 function handleCodexDynamicsFeatureRoutes(PDO $pdo, string $apiPath, string $method, array $input, ?array $adminSession, ?array $portalSession): void
 {
+    if (codexFeatureHandlePortalMilestoneApproval($pdo, $apiPath, $method, $portalSession)) return;
     if (codexFeatureHandleStaffNotes($pdo, $apiPath, $method, $input, $adminSession)) return;
     if (codexFeatureHandleBlogCategories($pdo, $apiPath, $method, $input, $adminSession)) return;
     if (codexFeatureHandleClientProjects($pdo, $apiPath, $method, $input, $adminSession)) return;

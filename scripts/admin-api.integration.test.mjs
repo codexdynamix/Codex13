@@ -15,6 +15,7 @@ const superAdminToken = 'api-test-super-admin-token';
 const teamLeaderToken = 'api-test-team-leader-token';
 const clientAlphaToken = 'api-test-client-alpha-token';
 const clientBetaToken = 'api-test-client-beta-token';
+const clientAlphaImpersonationToken = 'api-test-client-alpha-impersonation-token';
 const encryptedTokenSentinel = 'test-only-encrypted-hostinger-token';
 const testSessionSecret = 'api-integration-session-secret-with-more-than-32-bytes';
 
@@ -96,6 +97,10 @@ function seedDatabase(sqlitePath) {
     ');
     $client->execute(['client_alpha', 'Alpha Contact', 'Alpha Company', 'alpha@example.test', 'Active', $now, $now]);
     $client->execute(['client_beta', 'Beta Contact', 'Beta Company', 'beta@example.test', 'Active', $now, $now]);
+    $pdo->prepare('INSERT INTO client_identity_reviews (client_id_a, client_id_b, reason, status, created_at)
+      VALUES (?, ?, ?, ?, ?)')->execute([
+      'client_alpha', 'client_beta', 'Integration-test review', 'pending', $now,
+    ]);
     $portalAccess = $pdo->prepare('
       INSERT INTO client_portal_access (client_id, password_hash, status, portal_enabled, created_at)
       VALUES (?, ?, ?, ?, ?)
@@ -111,6 +116,15 @@ function seedDatabase(sqlitePath) {
       date('c', strtotime('+1 day')), $now]);
     $portalSession->execute([hash('sha256', ${JSON.stringify(clientBetaToken)}), 'client_beta',
       date('c', strtotime('+1 day')), $now]);
+    $pdo->prepare('INSERT INTO portal_sessions
+      (token_hash, client_id, expires_at, created_at, is_impersonating, admin_user_id)
+      VALUES (?, ?, ?, ?, 1, ?)')->execute([
+      hash('sha256', ${JSON.stringify(clientAlphaImpersonationToken)}),
+      'client_alpha',
+      date('c', strtotime('+1 day')),
+      $now,
+      'sa_test',
+    ]);
 
     $pdo->prepare("
       INSERT INTO hostinger_mail_integrations
@@ -250,8 +264,8 @@ async function startHostingerMock() {
   hostingerMockOrigin = `http://127.0.0.1:${address.port}`;
 }
 
-async function requestJson(route, { token, method = 'GET', body } = {}) {
-  const headers = { Accept: 'application/json' };
+async function requestJson(route, { token, method = 'GET', body, headers: extraHeaders = {} } = {}) {
+  const headers = { Accept: 'application/json', ...extraHeaders };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch(`${apiOrigin}${route}`, {
@@ -433,6 +447,187 @@ test('newsletter subscribers are validated, persisted centrally, and deduplicate
   assert.equal(duplicate.response.status, 200, JSON.stringify(duplicate.data));
   assert.equal(duplicate.data.ok, true);
   assert.equal(duplicate.data.alreadySubscribed, true);
+});
+
+test('visitor and admin chat APIs persist messages across reloads', async () => {
+  const chatToken = 'integration-test-visitor-chat-session-token-0001';
+  const headers = { 'X-Chat-Token': chatToken };
+  const empty = await requestJson('/api/crm/chat/messages', { headers });
+  assert.equal(empty.response.status, 200, JSON.stringify(empty.data));
+  assert.deepEqual(empty.data.messages, []);
+
+  const visitorMessage = await requestJson('/api/crm/chat/messages', {
+    method: 'POST',
+    headers,
+    body: { message: 'Can you share the project timeline?' },
+  });
+  assert.equal(visitorMessage.response.status, 201, JSON.stringify(visitorMessage.data));
+  const clientId = visitorMessage.data.message.user_id;
+  assert.equal(visitorMessage.data.message.sender, 'client');
+
+  const staffMessage = await requestJson('/api/admin/messages', {
+    token: superAdminToken,
+    method: 'POST',
+    body: { user_id: clientId, body: 'We will send the timeline today.' },
+  });
+  assert.equal(staffMessage.response.status, 200, JSON.stringify(staffMessage.data));
+  assert.equal(staffMessage.data.message.sender, 'agent');
+
+  const visitorReload = await requestJson('/api/crm/chat/messages', { headers });
+  assert.equal(visitorReload.response.status, 200, JSON.stringify(visitorReload.data));
+  assert.deepEqual(visitorReload.data.messages.map((message) => message.body).sort(), [
+    'Can you share the project timeline?',
+    'We will send the timeline today.',
+  ].sort());
+
+  const adminHistory = await requestJson(`/api/admin/messages?user_id=${encodeURIComponent(clientId)}`, {
+    token: superAdminToken,
+  });
+  assert.equal(adminHistory.response.status, 200, JSON.stringify(adminHistory.data));
+  assert.deepEqual(adminHistory.data.messages.map((message) => message.body).sort(), [
+    'Can you share the project timeline?',
+    'We will send the timeline today.',
+  ].sort());
+
+  const adminThreads = await requestJson('/api/admin/messages/threads', { token: superAdminToken });
+  assert.equal(adminThreads.response.status, 200, JSON.stringify(adminThreads.data));
+  const thread = adminThreads.data.threads.find((item) => item.id === clientId);
+  assert.ok(thread, 'Admin chat should list the visitor thread');
+  assert.ok(thread.last_message, 'The admin thread should expose its latest message');
+});
+
+test('staff notes are authenticated, saved, and returned from the database', async () => {
+  const unauthenticated = await requestJson('/api/admin/staff/tl_test/notes');
+  assert.equal(unauthenticated.response.status, 401);
+
+  const created = await requestJson('/api/admin/staff/tl_test/notes', {
+    token: superAdminToken,
+    method: 'POST',
+    body: { text: 'Confirm team-lead onboarding is complete.' },
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.data));
+  assert.equal(created.data.note.text, 'Confirm team-lead onboarding is complete.');
+
+  const reloaded = await requestJson('/api/admin/staff/tl_test/notes', { token: superAdminToken });
+  assert.equal(reloaded.response.status, 200, JSON.stringify(reloaded.data));
+  assert.equal(reloaded.data.notes.length, 1);
+  assert.equal(reloaded.data.notes[0].text, created.data.note.text);
+  assert.equal(reloaded.data.notes[0].by, 'Test Super Admin');
+});
+
+test('client project milestones are scoped and approvals persist for the client and staff', async () => {
+  const unauthenticated = await requestJson(
+    '/api/portal/projects/project_test/milestones/milestone_test/approve',
+    { method: 'POST' },
+  );
+  assert.equal(unauthenticated.response.status, 401);
+
+  const created = await requestJson('/api/admin/client-projects', {
+    token: superAdminToken,
+    method: 'POST',
+    body: {
+      client_id: 'client_alpha',
+      name: 'Portal Approval Integration Project',
+      status: 'In Progress',
+      progress: 35,
+      milestones: [{
+        id: 'milestone_design_review',
+        title: 'Design review',
+        status: 'in_progress',
+        dueDate: '2027-01-15',
+      }],
+      recent_updates: [],
+    },
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.data));
+  const projectId = created.data.project.id;
+  const approvalPath = `/api/portal/projects/${encodeURIComponent(projectId)}/milestones/milestone_design_review/approve`;
+
+  const impersonated = await requestJson(approvalPath, {
+    token: clientAlphaImpersonationToken,
+    method: 'POST',
+  });
+  assert.equal(impersonated.response.status, 403, JSON.stringify(impersonated.data));
+  assert.match(impersonated.data.error, /read-only/i);
+
+  const foreignClient = await requestJson(approvalPath, {
+    token: clientBetaToken,
+    method: 'POST',
+  });
+  assert.equal(foreignClient.response.status, 404, JSON.stringify(foreignClient.data));
+
+  const approved = await requestJson(approvalPath, {
+    token: clientAlphaToken,
+    method: 'POST',
+  });
+  assert.equal(approved.response.status, 200, JSON.stringify(approved.data));
+  const approvedMilestone = approved.data.project.milestones[0];
+  assert.equal(approvedMilestone.clientApproved, true);
+  assert.ok(approvedMilestone.clientApprovedAt);
+
+  const repeatedApproval = await requestJson(approvalPath, {
+    token: clientAlphaToken,
+    method: 'POST',
+  });
+  assert.equal(repeatedApproval.response.status, 200, JSON.stringify(repeatedApproval.data));
+  assert.equal(repeatedApproval.data.project.milestones[0].clientApprovedAt, approvedMilestone.clientApprovedAt);
+
+  const portalReload = await requestJson('/api/portal/data?client_id=client_alpha', { token: clientAlphaToken });
+  assert.equal(portalReload.response.status, 200, JSON.stringify(portalReload.data));
+  const reloadedProject = portalReload.data.projects.find((project) => project.id === projectId);
+  assert.ok(reloadedProject, 'The approved project should remain in portal data');
+  const reloadedMilestones = typeof reloadedProject.milestones === 'string'
+    ? JSON.parse(reloadedProject.milestones)
+    : reloadedProject.milestones;
+  assert.equal(reloadedMilestones[0].clientApproved, true);
+  assert.equal(reloadedMilestones[0].clientApprovedAt, approvedMilestone.clientApprovedAt);
+
+  const staffProjects = await requestJson('/api/admin/client-projects', { token: superAdminToken });
+  assert.equal(staffProjects.response.status, 200, JSON.stringify(staffProjects.data));
+  const staffProject = staffProjects.data.projects.find((project) => project.id === projectId);
+  assert.equal(staffProject.milestones[0].clientApproved, true);
+  assert.equal(staffProject.milestones[0].clientApprovedAt, approvedMilestone.clientApprovedAt);
+});
+
+test('identity reviews require Super Admin resolution and blocked merges leave data pending', async () => {
+  const forbidden = await requestJson('/api/admin/client-identity-reviews?status=pending', {
+    token: teamLeaderToken,
+  });
+  assert.equal(forbidden.response.status, 403);
+
+  const pending = await requestJson('/api/admin/client-identity-reviews?status=pending', {
+    token: superAdminToken,
+  });
+  assert.equal(pending.response.status, 200, JSON.stringify(pending.data));
+  assert.ok(pending.data.reviews.some((review) =>
+    review.client_id_a === 'client_alpha' && review.client_id_b === 'client_beta'));
+
+  const blockedMerge = await requestJson('/api/admin/client-identity-reviews/client_alpha/client_beta', {
+    token: superAdminToken,
+    method: 'POST',
+    body: { decision: 'merge', primary_client_id: 'client_alpha' },
+  });
+  assert.equal(blockedMerge.response.status, 409, JSON.stringify(blockedMerge.data));
+
+  const stillPending = await requestJson('/api/admin/client-identity-reviews?status=pending', {
+    token: superAdminToken,
+  });
+  assert.ok(stillPending.data.reviews.some((review) =>
+    review.client_id_a === 'client_alpha' && review.client_id_b === 'client_beta'));
+
+  const distinct = await requestJson('/api/admin/client-identity-reviews/client_alpha/client_beta', {
+    token: superAdminToken,
+    method: 'POST',
+    body: { decision: 'distinct' },
+  });
+  assert.equal(distinct.response.status, 200, JSON.stringify(distinct.data));
+  assert.equal(distinct.data.status, 'resolved_distinct');
+
+  const resolved = await requestJson('/api/admin/client-identity-reviews?status=pending', {
+    token: superAdminToken,
+  });
+  assert.equal(resolved.data.reviews.some((review) =>
+    review.client_id_a === 'client_alpha' && review.client_id_b === 'client_beta'), false);
 });
 
 test('Hostinger mail access is client-scoped and integration responses redact the token', async (t) => {

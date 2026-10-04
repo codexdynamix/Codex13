@@ -55,6 +55,8 @@ export interface ProjectMilestone {
   status: 'completed' | 'in_progress' | 'pending';
   dueDate: string;
   notes?: string;
+  clientApproved?: boolean;
+  clientApprovedAt?: string;
 }
 
 export interface ProjectUpdate {
@@ -1196,6 +1198,31 @@ export const portalDb = {
   getProjects(clientId: string): ClientProject[] {
     const db = loadDatabase();
     return db.projects.filter((p) => p.clientId === clientId);
+  },
+
+  async approveProjectMilestone(clientId: string, projectId: string, milestoneId: string): Promise<ClientProject> {
+    const response = await fetch(
+      `/api/portal/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/approve`,
+      {
+        method: 'POST',
+        headers: portalAuthorizationHeaders(),
+      },
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok || !result.project) {
+      throw new Error(result.error || `Could not approve milestone (${response.status}).`);
+    }
+
+    const updatedProject = fromApiRow(result.project) as ClientProject;
+    if (updatedProject.id !== projectId || updatedProject.clientId !== clientId) {
+      throw new Error('The server returned a project outside this Client account.');
+    }
+    const db = loadDatabase();
+    const index = db.projects.findIndex((project) => project.id === projectId && project.clientId === clientId);
+    if (index < 0) db.projects.push(updatedProject);
+    else db.projects[index] = updatedProject;
+    saveDatabase(db);
+    return updatedProject;
   },
 
   getProjectById(clientId: string, projectId: string): ClientProject {

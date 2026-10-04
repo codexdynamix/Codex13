@@ -425,6 +425,9 @@ export default function ClientProjectsWorkspace({
           {filteredProjects.map((project) => {
             const client = clients.find((item) => String(item.id) === String(project.client_id));
             const progress = Math.max(0, Math.min(100, Number(project.progress) || 0));
+            const approvedMilestones = Array.isArray(project.milestones)
+              ? project.milestones.filter((milestone) => milestone?.clientApproved)
+              : [];
             return (
               <article key={project.id} style={{ padding: '15px 16px', border: '1px solid var(--crm-border, rgba(255,255,255,.14))', borderRadius: 9, background: 'var(--crm-card, #242426)' }} data-testid={`card-client-project-${project.id}`}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
@@ -451,6 +454,19 @@ export default function ClientProjectsWorkspace({
                   <div data-testid={`text-project-dates-${project.id}`}><span style={{ display: 'block', color: 'var(--crm-text-muted, #929298)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em' }}>Target date</span><span style={{ fontSize: 12 }}>{project.target_date ? String(project.target_date).slice(0, 10) : 'Not set'}</span></div>
                 </div>
                 {(Array.isArray(project.milestones) && project.milestones.length > 0) && <p style={{ margin: '10px 0 0', color: 'var(--crm-text-muted, #929298)', fontSize: 11 }} data-testid={`text-project-milestone-count-${project.id}`}>{project.milestones.length} milestone{project.milestones.length === 1 ? '' : 's'}</p>}
+                {approvedMilestones.length > 0 && (
+                  <div style={{ marginTop: 10, padding: '9px 11px', border: '1px solid rgba(68,211,162,.24)', borderRadius: 7, background: 'rgba(68,211,162,.05)', color: 'var(--crm-text-secondary, #b0b0b5)', fontSize: 11 }} data-testid={`list-client-approved-milestones-${project.id}`}>
+                    <strong style={{ color: '#72d8af' }}>Client-approved milestones</strong>
+                    <ul style={{ margin: '5px 0 0', paddingLeft: 18 }}>
+                      {approvedMilestones.map((milestone) => (
+                        <li key={milestone.id}>
+                          {milestone.title || 'Milestone'}
+                          {milestone.clientApprovedAt ? ` · ${String(milestone.clientApprovedAt).slice(0, 10)}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {project.recent_updates && <details style={{ marginTop: 8, color: 'var(--crm-text-secondary, #b0b0b5)', fontSize: 11 }} data-testid={`details-project-updates-${project.id}`}><summary style={{ cursor: 'pointer' }}>Recent updates</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'var(--crm-text-muted, #929298)' }}>{jsonText(project.recent_updates)}</pre></details>}
               </article>
             );

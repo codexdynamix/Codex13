@@ -18,7 +18,7 @@ import { calculateReadingTime } from "@/lib/reading-time";
 import { analyzePowerWords } from "@/lib/power-words";
 import { BlogEditorPage } from "./BlogEditorPage";
 import type { BlogPost } from "@/types/crm";
-import { getStoredCategories } from "@/lib/categories";
+import { getAdminBlogCategories } from "@/crm/admin-app/adminApi";
 
 interface BlogsTabProps {
   blogs: BlogPost[];
@@ -47,11 +47,32 @@ export function BlogsTab({
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "title" | "words">("newest");
   const [viewLayout, setViewLayout] = useState<"grid" | "table">("grid");
+  const [sharedCategories, setSharedCategories] = useState<{ name: string }[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoriesError, setCategoriesError] = useState("");
 
   // Keep parent notified for layout adjustment
   useEffect(() => {
     onEditorStateChange?.(isEditorOpen);
   }, [isEditorOpen, onEditorStateChange]);
+
+  useEffect(() => {
+    if (isEditorOpen) return undefined;
+    let active = true;
+    setCategoriesLoading(true);
+    setCategoriesError("");
+    getAdminBlogCategories()
+      .then((categories) => {
+        if (active) setSharedCategories(categories);
+      })
+      .catch((error) => {
+        if (active) setCategoriesError(error instanceof Error ? error.message : "Shared blog categories could not be loaded.");
+      })
+      .finally(() => {
+        if (active) setCategoriesLoading(false);
+      });
+    return () => { active = false; };
+  }, [isEditorOpen]);
 
   // Read URL params on mount or change to support direct link / deep linking
   useEffect(() => {
@@ -105,12 +126,12 @@ export function BlogsTab({
     return () => window.removeEventListener("popstate", handlePopState);
   }, [blogs]);
 
-  // Categories List (stored categories + any custom categories on blogs)
+  // Use the shared database categories, while retaining categories already used by posts.
   const categoriesList = useMemo(() => {
-    const stored = getStoredCategories().map((c) => c.name);
+    const stored = sharedCategories.map((category) => category.name).filter(Boolean);
     const fromBlogs = blogs.map((b) => b.category).filter(Boolean);
     return Array.from(new Set([...stored, ...fromBlogs]));
-  }, [blogs]);
+  }, [blogs, sharedCategories]);
 
   // Stats Calculations
   const stats = useMemo(() => {
@@ -327,6 +348,7 @@ export function BlogsTab({
           <select
             value={selectedCategoryFilter}
             onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+            aria-busy={categoriesLoading}
             className="px-3 py-2 text-xs bg-[#22262E] border border-[#444A55] rounded-xl text-[#EAECEF] font-medium focus:border-[#0071E3] outline-none cursor-pointer"
           >
             <option value="all">All Categories</option>
@@ -336,6 +358,11 @@ export function BlogsTab({
               </option>
             ))}
           </select>
+          {categoriesError && (
+            <span role="alert" data-testid="status-blog-categories-load-error" className="text-[10px] text-rose-300">
+              Shared categories could not be loaded. Categories already used by posts are still available.
+            </span>
+          )}
 
           {/* Sort By */}
           <select

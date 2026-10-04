@@ -832,6 +832,7 @@ if (($apiPath === '/portal/data'
     || $apiPath === '/portal/mail/reply'
     || $apiPath === '/portal/mailboxes'
     || str_starts_with($apiPath, '/portal/mailboxes/')
+    || str_starts_with($apiPath, '/portal/projects/')
     || $apiPath === '/portal/messages/presence'
     || $apiPath === '/portal/logout'
     || str_starts_with($apiPath, '/client/')) && !$isPortalLogin) {
