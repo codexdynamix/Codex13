@@ -155,17 +155,21 @@ export default function CrmSettingsTab({ showNotification }) {
     setSaved(false);
   };
 
-  const handleSave = () => {
-    saveCrmThemeSettings(settings);
-    setSaved(true);
-    if (showNotification) {
-      showNotification('Apple iOS CRM theme & palette saved successfully.');
+  const handleSave = async () => {
+    try {
+      await saveCrmThemeSettings(settings);
+      setSaved(true);
+      showNotification?.('CRM theme saved for all staff.');
+    } catch (error) {
+      showNotification?.(error.message || 'CRM theme could not be saved.', 'error');
     }
   };
 
   const handleReset = () => {
     setSettings(DEFAULT_CRM_SETTINGS);
-    saveCrmThemeSettings(DEFAULT_CRM_SETTINGS);
+    saveCrmThemeSettings(DEFAULT_CRM_SETTINGS).catch((error) => {
+      showNotification?.(error.message || 'CRM theme could not be reset.', 'error');
+    });
     setPalettePillars([
       { id: 'accent', label: 'Primary Accent', hex: '#0A84FF', locked: false, desc: 'Action buttons & pills' },
       { id: 'bg', label: 'Canvas Background', hex: '#16171B', locked: false, desc: 'Apple dark gray base' },

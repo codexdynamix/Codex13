@@ -54,7 +54,7 @@ import StaffProfilePage from './components/StaffProfilePage.jsx';
 import { UserChrome } from './components/UserChrome.jsx';
 import ReactCapabilityWorkspace from './components/ReactCapabilityWorkspace.jsx';
 import { Crown, Building2, Users, UserCheck, Briefcase, ArrowRight, ShieldCheck } from 'lucide-react';
-import { applyCrmThemeToDom } from './components/CrmSettings/crmThemeState';
+import { applyCrmThemeToDom, loadCrmThemeFromServer } from './components/CrmSettings/crmThemeState';
 
 const CRM_ICON_TOKENS = {
   office: '🏢',
@@ -469,6 +469,7 @@ function App() {
 
   useEffect(() => {
     applyCrmThemeToDom();
+    loadCrmThemeFromServer().catch(() => {});
     const handleThemeChange = () => applyCrmThemeToDom();
     window.addEventListener('cdx:crm-theme-changed', handleThemeChange);
     return () => window.removeEventListener('cdx:crm-theme-changed', handleThemeChange);

@@ -21,7 +21,6 @@ import {
   updateStaffCapabilities,
   getStaffNotesAdmin,
   addStaffNoteAdmin,
-  importLegacyStaffNotesAdmin,
   blockStaffApi,
   unblockStaffApi,
 } from '../adminApi.js';
@@ -224,16 +223,6 @@ export default function StaffProfilePage({
     setStaffNoteError('');
     const loadNotes = async () => {
       try {
-        const migrationKey = `crm_staff_notes_imported_v1:${staff.id}`;
-        if (!localStorage.getItem(migrationKey)) {
-          const raw = localStorage.getItem(`crm_staff_notes:${staff.id}`);
-          if (raw) {
-            const legacyNotes = JSON.parse(raw);
-            if (!Array.isArray(legacyNotes)) throw new Error('The saved staff-note backup is invalid.');
-            if (legacyNotes.length) await importLegacyStaffNotesAdmin(staff.id, legacyNotes);
-          }
-          localStorage.setItem(migrationKey, '1');
-        }
         const notes = await getStaffNotesAdmin(staff.id);
         if (!cancelled) setStaffNotes(notes);
       } catch (error) {

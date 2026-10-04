@@ -52,11 +52,10 @@ import {
 import { toast } from "sonner";
 import { calculateReadingTime } from "@/lib/reading-time";
 import { analyzePowerWords, POWER_WORDS_DICTIONARY } from "@/lib/power-words";
-import { getLegacyStoredCategories, type BlogCategory } from "@/lib/categories";
+import type { BlogCategory } from "@/lib/categories";
 import {
   addAdminBlogCategory,
   getAdminBlogCategories,
-  importLegacyAdminBlogCategories,
 } from "@/crm/admin-app/adminApi";
 import { ImagePickerModal, type ImageSelectionMeta } from "./ImagePickerModal";
 import type { BlogPost } from "@/types/crm";
@@ -206,12 +205,6 @@ export function BlogEditorPage({
     const loadCategories = async () => {
       setCategoriesLoading(true);
       try {
-        const migrationKey = "codex_blog_categories_imported_v1";
-        if (!window.localStorage.getItem(migrationKey)) {
-          const legacyCategories = getLegacyStoredCategories();
-          if (legacyCategories.length) await importLegacyAdminBlogCategories(legacyCategories);
-          window.localStorage.setItem(migrationKey, "1");
-        }
         const categories = await getAdminBlogCategories();
         if (active) setCategoriesList(categories);
       } catch (error) {

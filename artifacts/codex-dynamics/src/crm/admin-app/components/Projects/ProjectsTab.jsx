@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './ProjectsTab.css';
-import { getAdminSiteContent, importLegacySiteContentAdmin, runAdminSiteContentAction, uploadAdminSiteImage } from '../../adminApi.js';
+import { getAdminSiteContent, runAdminSiteContentAction, uploadAdminSiteImage } from '../../adminApi.js';
 import {
   Briefcase,
   Plus,
@@ -30,10 +30,6 @@ import {
   Zap,
   Globe
 } from 'lucide-react';
-import { DEMO_SHOWCASE_PROJECT_IDS } from '../../../../types/showcase';
-
-const STORAGE_KEY = 'codex_custom_projects';
-const STORAGE_MIGRATION_KEY = 'codex_custom_projects_imported_v1';
 
 const CATEGORIES = [
   'All',
@@ -73,31 +69,6 @@ export default function ProjectsTab({ showNotification = () => {} }) {
       setIsLoading(true);
       setLoadError('');
       try {
-        const legacyRaw = window.localStorage.getItem(STORAGE_KEY);
-        if (legacyRaw && window.localStorage.getItem(STORAGE_MIGRATION_KEY) !== '1') {
-          const legacy = JSON.parse(legacyRaw);
-          if (!Array.isArray(legacy)) throw new Error('The saved portfolio backup is not a project list.');
-          const records = legacy.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
-          const migrated = [];
-          for (const project of records) {
-            const next = { ...project };
-            if (typeof next.image === 'string' && next.image.startsWith('data:image/')) {
-              const uploaded = await uploadAdminSiteImage({
-                name: `${String(next.title || 'portfolio-project').replace(/[^a-z0-9-_]+/gi, '-')}.jpg`,
-                data: next.image,
-              });
-              next.image = uploaded.url;
-            }
-            migrated.push(next);
-          }
-          const result = await importLegacySiteContentAdmin({ showcaseProjects: migrated });
-          if (Number(result?.skipped || 0) === 0) {
-            window.localStorage.setItem(STORAGE_MIGRATION_KEY, '1');
-            window.localStorage.removeItem(STORAGE_KEY);
-          } else {
-            showNotification(`${result.imported || 0} old portfolio projects were saved. ${result.skipped} need review; the browser backup was kept.`);
-          }
-        }
         const content = await getAdminSiteContent();
         if (active) setProjects((content.projects || []).map(normalize));
       } catch (error) {
