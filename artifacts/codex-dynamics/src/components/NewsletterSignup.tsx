@@ -62,43 +62,29 @@ export function NewsletterSignup({
       setIsSubmitting(true);
       setError(null);
 
-      // Codex Dynamics CRM owns public lead capture and writes the shared site database.
-      const res = await fetch("/api/crm/leads", {
+      // The API is the authoritative store for subscriber records.
+      const res = await fetch("/api/newsletter/subscribers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          kind: "lead",
-          name: "Newsletter Subscriber",
           email: email.trim(),
-          company: "",
-          source: source,
-          status: "new",
-          score: 65,
-          notes: `Subscribed via ${source} at ${new Date().toLocaleString()}`,
+          source,
         }),
       });
 
-      // 2. Also persist locally for resilient offline access
-      try {
-        const raw = localStorage.getItem("codex-newsletter-subscribers");
-        const list = raw ? JSON.parse(raw) : [];
-        list.push({ email: email.trim(), date: new Date().toISOString(), source });
-        localStorage.setItem("codex-newsletter-subscribers", JSON.stringify(list));
-      } catch {
-        // ignore localStorage quota errors
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.ok !== true) {
+        throw new Error(data?.error || "Subscription could not be processed. Please try again.");
       }
-
-      const data = await res.json().catch(() => ({ ok: true }));
-      if (data.ok || res.ok) {
-        setIsSubscribed(true);
-        toast.success("You're on the list! Welcome to Codex Dynamics briefings.");
-      } else {
-        toast.error("Subscription could not be processed. Please try again.");
-      }
-    } catch {
-      // Fallback success if network error but saved locally
       setIsSubscribed(true);
-      toast.success("Subscribed successfully!");
+      toast.success("You're on the list! Welcome to Codex Dynamics briefings.");
+    } catch (submitError) {
+      const message =
+        submitError instanceof Error
+          ? submitError.message
+          : "Subscription could not be processed. Please try again.";
+      setError(message);
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }

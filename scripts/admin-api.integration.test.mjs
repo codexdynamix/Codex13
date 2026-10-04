@@ -406,6 +406,31 @@ test('admin settings and appointments persist with role-scoped access', async (t
   });
 });
 
+test('newsletter subscribers are validated, persisted centrally, and deduplicated', async () => {
+  const invalid = await requestJson('/api/newsletter/subscribers', {
+    method: 'POST',
+    body: { email: 'not-an-email', source: 'integration-test' },
+  });
+  assert.equal(invalid.response.status, 422);
+  assert.equal(invalid.data.ok, false);
+
+  const first = await requestJson('/api/newsletter/subscribers', {
+    method: 'POST',
+    body: { email: 'digest@example.test', source: 'integration-test' },
+  });
+  assert.equal(first.response.status, 201, JSON.stringify(first.data));
+  assert.equal(first.data.ok, true);
+  assert.equal(first.data.alreadySubscribed, false);
+
+  const duplicate = await requestJson('/api/newsletter/subscribers', {
+    method: 'POST',
+    body: { email: ' DIGEST@example.test ', source: 'footer' },
+  });
+  assert.equal(duplicate.response.status, 200, JSON.stringify(duplicate.data));
+  assert.equal(duplicate.data.ok, true);
+  assert.equal(duplicate.data.alreadySubscribed, true);
+});
+
 test('Hostinger mail access is client-scoped and integration responses redact the token', async (t) => {
   await t.test('the Hostinger integration remains Super Admin-only and never returns its stored value', async () => {
     const unauthenticated = await requestJson('/api/admin/integrations/hostinger-mail');

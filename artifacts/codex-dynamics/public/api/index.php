@@ -885,6 +885,37 @@ if ($apiPath === '/public/content' || $apiPath === '/content') {
 // -----------------------------------------------------------------------------
 // 2. LEAD INTAKE (Contact forms, booking modals, newsletter)
 // -----------------------------------------------------------------------------
+if ($apiPath === '/newsletter/subscribers' && $method === 'POST') {
+    $email = strtolower(trim((string)($input['email'] ?? '')));
+    $source = trim((string)($input['source'] ?? 'newsletter_signup'));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        jsonResponse(['ok' => false, 'error' => 'Enter a valid email address.'], 422);
+    }
+
+    $findSubscriber = $pdo->prepare('SELECT id FROM newsletter_subscribers WHERE email = ? LIMIT 1');
+    $findSubscriber->execute([$email]);
+    $existingId = $findSubscriber->fetchColumn();
+    if ($existingId !== false) {
+        jsonResponse(['ok' => true, 'alreadySubscribed' => true]);
+    }
+
+    $id = 'sub_' . bin2hex(random_bytes(12));
+    $now = date('c');
+    try {
+        $pdo->prepare('INSERT INTO newsletter_subscribers (id, email, source, subscribed_at) VALUES (?, ?, ?, ?)')
+            ->execute([$id, $email, substr($source !== '' ? $source : 'newsletter_signup', 0, 128), $now]);
+    } catch (PDOException $error) {
+        // A concurrent request may have inserted the same normalized address.
+        $findSubscriber->execute([$email]);
+        if ($findSubscriber->fetchColumn() === false) {
+            throw $error;
+        }
+        jsonResponse(['ok' => true, 'alreadySubscribed' => true]);
+    }
+
+    jsonResponse(['ok' => true, 'alreadySubscribed' => false], 201);
+}
+
 if ($apiPath === '/crm/leads') {
     if ($method === 'POST') {
         $id = 'ld_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 4);

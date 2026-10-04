@@ -120,6 +120,14 @@ function initSchema(PDO $pdo): void {
             updated_at VARCHAR(40) NOT NULL
         )
     ");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+            id VARCHAR(64) PRIMARY KEY,
+            email VARCHAR(320) NOT NULL UNIQUE,
+            source VARCHAR(128) NOT NULL,
+            subscribed_at VARCHAR(40) NOT NULL
+        )
+    ");
 
     // 1. Leads Table
     $pdo->exec("
