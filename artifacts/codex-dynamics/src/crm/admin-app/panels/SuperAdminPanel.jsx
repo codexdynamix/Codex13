@@ -2689,6 +2689,7 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     { name: 'Dashboard', icon: faTachometerAlt },
     { name: 'Client Management', icon: faUsers },
     { name: 'Staff', icon: faUsers },
+    { name: 'Agent Access', icon: faKey },
     { name: 'Accounting', icon: faFileInvoiceDollar },
     { name: 'Mail', icon: faComments },
     { name: 'Security & System', icon: faKey },
@@ -2699,7 +2700,6 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     { name: 'CRM Settings', icon: faPalette },
     { name: 'Projects', icon: faBriefcase },
     { name: 'Audit Log', icon: faHistory },
-    { name: 'Agent Access', icon: faKey },
   ];
 
   const [uploadOfficeId, setUploadOfficeId] = useState('');
