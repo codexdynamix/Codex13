@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,11 +13,18 @@ const apiRouter = path.join(projectRoot, 'artifacts/codex-dynamics/public/api/in
 const dbModule = path.join(projectRoot, 'artifacts/codex-dynamics/public/api/db.php');
 const superAdminToken = 'api-test-super-admin-token';
 const teamLeaderToken = 'api-test-team-leader-token';
+const clientAlphaToken = 'api-test-client-alpha-token';
+const clientBetaToken = 'api-test-client-beta-token';
+const encryptedTokenSentinel = 'test-only-encrypted-hostinger-token';
+const testSessionSecret = 'api-integration-session-secret-with-more-than-32-bytes';
 
 let testDirectory;
 let apiProcess;
 let apiOrigin;
 let serverOutput = '';
+let hostingerMockServer;
+let hostingerMockOrigin;
+const hostingerMockRequests = [];
 
 async function reservePort() {
   const server = net.createServer();
@@ -34,6 +42,21 @@ function seedDatabase(sqlitePath) {
     $_SERVER['REQUEST_METHOD'] = 'GET';
     require ${JSON.stringify(dbModule)};
     $pdo = getDb();
+    $tokenIv = random_bytes(12);
+    $tokenTag = '';
+    $tokenKey = hash_hmac('sha256', 'codex-client-credentials-v1', (string)getenv('SESSION_SECRET'), true);
+    $tokenCiphertext = openssl_encrypt(
+      ${JSON.stringify(encryptedTokenSentinel)},
+      'aes-256-gcm',
+      $tokenKey,
+      OPENSSL_RAW_DATA,
+      $tokenIv,
+      $tokenTag,
+      '',
+      16
+    );
+    if ($tokenCiphertext === false) throw new RuntimeException('Could not seed the test credential.');
+    $encryptedProviderToken = base64_encode($tokenIv . $tokenTag . $tokenCiphertext);
     $staff = $pdo->prepare('
       INSERT INTO staff_users
         (id, email, password, name, role, office_id, team_id, status, capabilities, created_at)
@@ -66,12 +89,161 @@ function seedDatabase(sqlitePath) {
       'office_one', 'team_one', null, null, '[]', $now, $now]);
     $lead->execute(['lead_other', 'Outside', 'Scope', 'Outside Scope',
       'office_two', 'team_two', null, null, '[]', $now, $now]);
+
+    $client = $pdo->prepare('
+      INSERT INTO portal_clients (id, name, company, email, password, status, portal_enabled, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    $client->execute(['client_alpha', 'Alpha Contact', 'Alpha Company', 'alpha@example.test',
+      password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
+    $client->execute(['client_beta', 'Beta Contact', 'Beta Company', 'beta@example.test',
+      password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
+
+    $portalSession = $pdo->prepare('
+      INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    ');
+    $portalSession->execute([hash('sha256', ${JSON.stringify(clientAlphaToken)}), 'client_alpha',
+      date('c', strtotime('+1 day')), $now]);
+    $portalSession->execute([hash('sha256', ${JSON.stringify(clientBetaToken)}), 'client_beta',
+      date('c', strtotime('+1 day')), $now]);
+
+    $pdo->prepare("
+      INSERT INTO hostinger_mail_integrations
+        (id, encrypted_token, status, mailbox_count, created_at, updated_at)
+      VALUES ('primary', ?, 'connected', 2, ?, ?)
+    ")->execute([$encryptedProviderToken, $now, $now]);
+
+    $mailbox = $pdo->prepare('
+      INSERT INTO client_mailboxes
+        (id, client_id, provider, provider_mailbox_id, email_address, display_name, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    $mailbox->execute(['mailbox_alpha', 'client_alpha', 'hostinger', 'ACclientAlpha123',
+      'info@alpha.example.test', 'Alpha Info', 'enabled', $now, $now]);
+    $mailbox->execute(['mailbox_beta', 'client_beta', 'hostinger', 'ACclientBeta456',
+      'info@beta.example.test', 'Beta Info', 'enabled', $now, $now]);
   `;
   execFileSync('php', ['-r', seed], {
     cwd: projectRoot,
-    env: { ...process.env, CODEX_SQLITE_PATH: sqlitePath, NODE_ENV: 'test' },
+    env: { ...process.env, CODEX_SQLITE_PATH: sqlitePath, NODE_ENV: 'test', SESSION_SECRET: testSessionSecret },
     stdio: 'pipe',
   });
+}
+
+async function startHostingerMock() {
+  hostingerMockServer = createServer((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      const url = new URL(request.url || '/', 'http://127.0.0.1');
+      let body = {};
+      try {
+        body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+      } catch {}
+      hostingerMockRequests.push({
+        method: request.method,
+        path: url.pathname,
+        query: url.search,
+        authorized: request.headers.authorization === `Bearer ${encryptedTokenSentinel}`,
+        contentType: request.headers['content-type'] || '',
+        body,
+      });
+
+      const json = (status, payload) => {
+        response.writeHead(status, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(payload));
+      };
+      if (request.headers.authorization !== `Bearer ${encryptedTokenSentinel}`) {
+        json(401, { error: 'Unauthorized', code: 'ERR_UNAUTHORIZED' });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/me') {
+        json(200, {
+          data: {
+            orderResourceId: 'ACorder123',
+            mailboxes: [
+              { resourceId: 'ACclientAlpha123', address: 'info@alpha.example.test' },
+              { resourceId: 'ACunassigned789', address: 'unassigned@example.test' },
+            ],
+          },
+        });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders') {
+        json(200, {
+          data: [
+            { path: 'INBOX', name: 'Inbox', specialUse: '\\Inbox', unreadCount: 2 },
+            { path: 'Sent', name: 'Sent', specialUse: '\\Sent', unreadCount: 0 },
+          ],
+          pagination: { page: 1, perPage: 100, total: 2, totalPages: 1 },
+        });
+        return;
+      }
+      const mockMessage = {
+        uid: 77,
+        path: 'INBOX',
+        date: '2026-10-04T12:00:00.000Z',
+        flags: ['\\Seen', '\\Flagged'],
+        unseen: false,
+        size: 128,
+        subject: 'Mock invoice message',
+        from: { name: 'Sender', address: 'sender@example.test' },
+        to: [{ name: 'Alpha Info', address: 'info@alpha.example.test' }],
+        cc: [],
+        bcc: [],
+        messageId: '<mock-77@example.test>',
+        inReplyTo: null,
+        attachments: [{
+          id: 'att-77',
+          contentType: 'text/plain',
+          sizeBytes: 19,
+          inline: false,
+          filename: 'invoice.txt',
+          contentId: '',
+        }],
+      };
+      if (
+        (request.method === 'GET' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders/INBOX/messages')
+        || (request.method === 'POST' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders/INBOX/messages/search')
+      ) {
+        json(200, {
+          data: [mockMessage],
+          pagination: { page: 1, perPage: 25, total: 1, totalPages: 1 },
+        });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders/INBOX/messages/77') {
+        json(200, { data: mockMessage });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders/INBOX/messages/77/text') {
+        json(200, { data: { text: 'Mock message body', html: '<p>Mock message body</p>' } });
+        return;
+      }
+      if (
+        request.method === 'GET'
+        && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/folders/INBOX/messages/77/attachments/att-77'
+      ) {
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+        response.end(Buffer.from('mock attachment data'));
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/mailboxes/ACclientAlpha123/send') {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      json(404, { error: 'Not found', code: 'ERR_NOT_FOUND' });
+    });
+  });
+  await new Promise((resolve, reject) => {
+    hostingerMockServer.once('error', reject);
+    hostingerMockServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = hostingerMockServer.address();
+  if (!address || typeof address === 'string') throw new Error('Hostinger mock server did not bind to a TCP port.');
+  hostingerMockOrigin = `http://127.0.0.1:${address.port}`;
 }
 
 async function requestJson(route, { token, method = 'GET', body } = {}) {
@@ -89,13 +261,20 @@ async function requestJson(route, { token, method = 'GET', body } = {}) {
 
 before(async () => {
   testDirectory = await mkdtemp(path.join(tmpdir(), 'codex-admin-api-'));
+  await startHostingerMock();
   const sqlitePath = path.join(testDirectory, 'integration.sqlite');
   seedDatabase(sqlitePath);
   const port = await reservePort();
   apiOrigin = `http://127.0.0.1:${port}`;
   apiProcess = spawn('php', ['-S', `127.0.0.1:${port}`, apiRouter], {
     cwd: projectRoot,
-    env: { ...process.env, CODEX_SQLITE_PATH: sqlitePath, NODE_ENV: 'test' },
+    env: {
+      ...process.env,
+      CODEX_SQLITE_PATH: sqlitePath,
+      HOSTINGER_MAIL_TEST_BASE_URL: hostingerMockOrigin,
+      NODE_ENV: 'test',
+      SESSION_SECRET: testSessionSecret,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   apiProcess.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
@@ -128,6 +307,9 @@ after(async () => {
         resolve();
       });
     });
+  }
+  if (hostingerMockServer) {
+    await new Promise((resolve) => hostingerMockServer.close(resolve));
   }
   if (testDirectory) await rm(testDirectory, { recursive: true, force: true });
 });
@@ -221,5 +403,142 @@ test('admin settings and appointments persist with role-scoped access', async (t
 
     const resets = await requestJson('/api/admin/password-reset-requests', { token: superAdminToken });
     assert.equal(resets.response.status, 200);
+  });
+});
+
+test('Hostinger mail access is client-scoped and integration responses redact the token', async (t) => {
+  await t.test('the Hostinger integration remains Super Admin-only and never returns its stored value', async () => {
+    const unauthenticated = await requestJson('/api/admin/integrations/hostinger-mail');
+    assert.equal(unauthenticated.response.status, 401);
+
+    const forbidden = await requestJson('/api/admin/integrations/hostinger-mail', {
+      token: teamLeaderToken,
+    });
+    assert.equal(forbidden.response.status, 403);
+
+    const configured = await requestJson('/api/admin/integrations/hostinger-mail', {
+      token: superAdminToken,
+    });
+    assert.equal(configured.response.status, 200, JSON.stringify(configured.data));
+    assert.equal(configured.data.integration.configured, true);
+    assert.equal(JSON.stringify(configured.data).includes(encryptedTokenSentinel), false);
+    assert.equal('encrypted_token' in configured.data.integration, false);
+  });
+
+  await t.test('mailbox lists use the authenticated client, not a client_id query parameter', async () => {
+    const alphaMailboxes = await requestJson('/api/portal/mailboxes?client_id=client_beta', {
+      token: clientAlphaToken,
+    });
+    assert.equal(alphaMailboxes.response.status, 200, JSON.stringify(alphaMailboxes.data));
+    assert.deepEqual(
+      alphaMailboxes.data.mailboxes.map((mailbox) => mailbox.providerMailboxId),
+      ['ACclientAlpha123'],
+    );
+    assert.equal(alphaMailboxes.data.mailboxes[0].emailAddress, 'info@alpha.example.test');
+
+    const betaMailboxes = await requestJson('/api/portal/mailboxes?client_id=client_alpha', {
+      token: clientBetaToken,
+    });
+    assert.equal(betaMailboxes.response.status, 200, JSON.stringify(betaMailboxes.data));
+    assert.deepEqual(
+      betaMailboxes.data.mailboxes.map((mailbox) => mailbox.providerMailboxId),
+      ['ACclientBeta456'],
+    );
+  });
+
+  await t.test('a foreign mailbox is rejected before any Hostinger request is attempted', async () => {
+    assert.equal(hostingerMockRequests.length, 0);
+    const folders = await requestJson('/api/portal/mailboxes/ACclientBeta456/folders', {
+      token: clientAlphaToken,
+    });
+    assert.equal(folders.response.status, 403, JSON.stringify(folders.data));
+
+    const send = await requestJson('/api/portal/mailboxes/ACclientBeta456/send', {
+      token: clientAlphaToken,
+      method: 'POST',
+      body: { to: ['recipient@example.test'], subject: 'Denied', text: 'Must not reach Hostinger.' },
+    });
+    assert.equal(send.response.status, 403, JSON.stringify(send.data));
+    assert.equal(hostingerMockRequests.length, 0);
+
+    const drafts = await requestJson('/api/portal/mailboxes/ACclientBeta456/drafts', {
+      token: clientAlphaToken,
+    });
+    assert.equal(drafts.response.status, 403, JSON.stringify(drafts.data));
+  });
+
+  await t.test('configured account, folders, and send requests use the authenticated provider API', async () => {
+    const account = await requestJson('/api/admin/hostinger/mailboxes', { token: superAdminToken });
+    assert.equal(account.response.status, 200, JSON.stringify(account.data));
+    const assignedMailbox = account.data.mailboxes.find((mailbox) => mailbox.resourceId === 'ACclientAlpha123');
+    assert.equal(assignedMailbox.assignedClientId, 'client_alpha');
+    const unassignedMailbox = account.data.mailboxes.find((mailbox) => mailbox.resourceId === 'ACunassigned789');
+    assert.equal(unassignedMailbox.assignedClientId, null);
+
+    const folders = await requestJson('/api/portal/mailboxes/ACclientAlpha123/folders', {
+      token: clientAlphaToken,
+    });
+    assert.equal(folders.response.status, 200, JSON.stringify(folders.data));
+    assert.deepEqual(folders.data.folders.map((folder) => folder.path), ['INBOX', 'Sent']);
+
+    const messages = await requestJson('/api/portal/mailboxes/ACclientAlpha123/folders/INBOX/messages?page=1&perPage=25', {
+      token: clientAlphaToken,
+    });
+    assert.equal(messages.response.status, 200, JSON.stringify(messages.data));
+    assert.equal(messages.data.messages[0].uid, 77);
+    assert.equal(messages.data.pagination.total, 1);
+
+    const search = await requestJson('/api/portal/mailboxes/ACclientAlpha123/folders/INBOX/messages/search?page=1&perPage=25', {
+      token: clientAlphaToken,
+      method: 'POST',
+      body: { text: 'invoice' },
+    });
+    assert.equal(search.response.status, 200, JSON.stringify(search.data));
+    assert.equal(search.data.messages[0].subject, 'Mock invoice message');
+
+    const opened = await requestJson('/api/portal/mailboxes/ACclientAlpha123/folders/INBOX/messages/77', {
+      token: clientAlphaToken,
+    });
+    assert.equal(opened.response.status, 200, JSON.stringify(opened.data));
+    assert.equal(opened.data.message.uid, 77);
+    assert.equal(opened.data.body.text, 'Mock message body');
+
+    const attachment = await fetch(
+      `${apiOrigin}/api/portal/mailboxes/ACclientAlpha123/folders/INBOX/messages/77/attachments/att-77`,
+      { headers: { Authorization: `Bearer ${clientAlphaToken}` } },
+    );
+    assert.equal(attachment.status, 200);
+    assert.equal(attachment.headers.get('content-type'), 'application/octet-stream');
+    assert.equal(await attachment.text(), 'mock attachment data');
+
+    const sent = await requestJson('/api/portal/mailboxes/ACclientAlpha123/send', {
+      token: clientAlphaToken,
+      method: 'POST',
+      body: {
+        to: ['recipient@example.test'],
+        cc: [],
+        bcc: [],
+        subject: 'Mocked provider send',
+        text: 'This request is intercepted by the local provider test server.',
+      },
+    });
+    assert.equal(sent.response.status, 200, JSON.stringify(sent.data));
+    assert.equal(sent.data.sent, true);
+
+    const accountRequest = hostingerMockRequests.find((item) => item.path === '/api/v1/me');
+    assert.equal(accountRequest?.method, 'GET');
+    assert.equal(accountRequest?.authorized, true);
+    const searchRequest = hostingerMockRequests.find((item) => item.path.endsWith('/messages/search') && item.body.text);
+    assert.equal(searchRequest?.authorized, true);
+    assert.equal(searchRequest?.body.text, 'invoice');
+    const attachmentRequest = hostingerMockRequests.find((item) => item.path.endsWith('/attachments/att-77'));
+    assert.equal(attachmentRequest?.authorized, true);
+    const sendRequest = hostingerMockRequests.find((item) => item.path.endsWith('/send'));
+    assert.equal(sendRequest?.method, 'POST');
+    assert.equal(sendRequest?.authorized, true);
+    assert.match(sendRequest?.contentType || '', /application\/json/i);
+    assert.equal(sendRequest?.body.displayName, 'Alpha Info');
+    assert.deepEqual(sendRequest?.body.to, ['recipient@example.test']);
+    assert.equal(sendRequest?.body.text, 'This request is intercepted by the local provider test server.');
   });
 });

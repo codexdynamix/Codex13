@@ -65,6 +65,31 @@ function hostingerMailToken(PDO $pdo): string {
     return $token;
 }
 
+function hostingerMailApiBaseUrl(): string {
+    $testUrl = trim((string)(getenv('HOSTINGER_MAIL_TEST_BASE_URL') ?: ''));
+    if (getenv('NODE_ENV') === 'test' && $testUrl !== '') {
+        $parts = parse_url($testUrl);
+        $allowedHosts = ['127.0.0.1', 'localhost', '::1'];
+        if (
+            !is_array($parts)
+            || ($parts['scheme'] ?? '') !== 'http'
+            || !in_array($parts['host'] ?? '', $allowedHosts, true)
+            || !isset($parts['port'])
+            || $parts['port'] < 1
+            || $parts['port'] > 65535
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+            || !in_array($parts['path'] ?? '', ['', '/'], true)
+        ) {
+            throw new InvalidArgumentException('The Hostinger test endpoint must be a local HTTP URL.');
+        }
+        return rtrim($testUrl, '/');
+    }
+    return 'https://api.mail.hostinger.com';
+}
+
 function hostingerMailRequestWithToken(string $token, string $method, string $path, ?array $payload = null): array {
     if (!function_exists('curl_init')) {
         throw new HostingerMailApiException(0, 'curl_unavailable');
@@ -73,19 +98,21 @@ function hostingerMailRequestWithToken(string $token, string $method, string $pa
         throw new InvalidArgumentException('Invalid Hostinger Mail API path.');
     }
 
+    $baseUrl = hostingerMailApiBaseUrl();
+    $protocol = parse_url($baseUrl, PHP_URL_SCHEME) === 'https' ? CURLPROTO_HTTPS : CURLPROTO_HTTP;
     $headers = [
         'Accept: application/json',
         'Authorization: Bearer ' . $token,
     ];
     $options = [
-        CURLOPT_URL => 'https://api.mail.hostinger.com' . $path,
+        CURLOPT_URL => $baseUrl . $path,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST => strtoupper($method),
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_CONNECTTIMEOUT => 7,
         CURLOPT_TIMEOUT => 25,
         CURLOPT_FOLLOWLOCATION => false,
-        CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_PROTOCOLS => $protocol,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
     ];
@@ -136,6 +163,11 @@ function hostingerMailStoredRequest(PDO $pdo, string $method, string $path, ?arr
 function hostingerMailResponseData(array $response): array {
     $data = $response['json']['data'] ?? [];
     return is_array($data) ? $data : [];
+}
+
+function hostingerMailResponseCollection(array $response): array {
+    $body = $response['json'] ?? [];
+    return is_array($body) ? $body : [];
 }
 
 function hostingerMailQuery(array $values): string {
@@ -279,7 +311,7 @@ function hostingerMailListFolders(PDO $pdo, string $resourceId): array {
         'GET',
         '/api/v1/mailboxes/' . hostingerMailSegment($resourceId) . '/folders?' . hostingerMailQuery(['page' => 1, 'perPage' => 100])
     );
-    return hostingerMailResponseData($response);
+    return hostingerMailResponseCollection($response);
 }
 
 function hostingerMailNormalizeAddresses(mixed $value, string $field): array {
@@ -433,7 +465,7 @@ function hostingerMailStarred(PDO $pdo, string $resourceId, int $page, int $perP
             $query = hostingerMailQuery(['page' => $providerPage, 'perPage' => $providerPerPage, 'sort' => '-date']);
             $requestPath = hostingerMailFolderPath($resourceId, $path, '/messages/search?' . $query);
             $response = hostingerMailStoredRequest($pdo, 'POST', $requestPath, ['flags' => ['\\Flagged']]);
-            $data = hostingerMailResponseData($response);
+            $data = hostingerMailResponseCollection($response);
             if ($providerPage === 1) $total += (int)($data['pagination']['total'] ?? 0);
             foreach (($data['data'] ?? []) as $message) {
                 if (is_array($message)) $messages[] = $message;
@@ -916,7 +948,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
             '/messages/search?' . hostingerMailQuery(['page' => $page, 'perPage' => $perPage, 'sort' => $sort])
         );
         $response = hostingerMailStoredRequest($pdo, 'POST', $path, ['text' => $text]);
-        $data = hostingerMailResponseData($response);
+        $data = hostingerMailResponseCollection($response);
         jsonResponse([
             'ok' => true,
             'messages' => is_array($data['data'] ?? null) ? $data['data'] : [],
@@ -939,7 +971,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
             '/messages?' . hostingerMailQuery(['page' => $page, 'perPage' => $perPage, 'sort' => $sort])
         );
         $response = hostingerMailStoredRequest($pdo, 'GET', $path);
-        $data = hostingerMailResponseData($response);
+        $data = hostingerMailResponseCollection($response);
         jsonResponse([
             'ok' => true,
             'messages' => is_array($data['data'] ?? null) ? $data['data'] : [],
@@ -961,16 +993,18 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
             '/messages/' . (int)$uid . '/attachments/' . hostingerMailSegment($attachmentId)
         );
         $token = hostingerMailToken($pdo);
+        $baseUrl = hostingerMailApiBaseUrl();
+        $protocol = parse_url($baseUrl, PHP_URL_SCHEME) === 'https' ? CURLPROTO_HTTPS : CURLPROTO_HTTP;
         $handle = curl_init();
         if ($handle === false) jsonResponse(['ok' => false, 'error' => 'Unable to connect to the email service. Please try again.'], 502);
         curl_setopt_array($handle, [
-            CURLOPT_URL => 'https://api.mail.hostinger.com' . $path,
+            CURLOPT_URL => $baseUrl . $path,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => ['Accept: application/octet-stream', 'Authorization: Bearer ' . $token],
             CURLOPT_CONNECTTIMEOUT => 7,
             CURLOPT_TIMEOUT => 25,
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_PROTOCOLS => $protocol,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
         ]);
