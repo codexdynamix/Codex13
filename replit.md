@@ -33,7 +33,9 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 
 - `artifacts/codex-dynamics/src/` — website, CRM, client portal, and frontend services
 - `artifacts/codex-dynamics/public/api/index.php` — PHP API router
-- `artifacts/codex-dynamics/public/api/db.php` — PDO connection, SQLite schema, and initial database seeding
+- `artifacts/codex-dynamics/public/api/index.php` — front controller: request parsing, session lookup, then `routes/NN-*.php` in order
+- `artifacts/codex-dynamics/public/api/routes/` — one file per route group (public content, intake, staff, auth, portal…)
+- `artifacts/codex-dynamics/public/api/lib/` — `db.php` (PDO + schema, re-applied only when the file changes, tracked in `schema_state`), `core.php` (sessions/auth guards), `route-helpers.php`, `feature-routes.php`, `hostinger-mail.php`. `lib/` and `routes/` are denied to direct web access via `.htaccess`.
 - `artifacts/codex-dynamics/data/codex.sqlite` — local SQLite database used by the PHP API
 - `artifacts/api-server/` — Replit API service wrapper (package.json scripts only) that launches the PHP API router
 - `scripts/admin-api.integration.test.mjs` — PHP API integration tests (isolated temp SQLite per run)
