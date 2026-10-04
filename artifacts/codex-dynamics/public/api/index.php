@@ -2902,81 +2902,6 @@ if (preg_match('#^/admin/offices/([^/]+)(?:/(manager))?$#', $apiPath, $m)) {
     jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
-if ($apiPath === '/admin/offices') {
-    if ($method === 'POST') {
-        $id = 'of_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-        $name = trim($input['name'] ?? 'New Office');
-        $now = date('c');
-        $manager = null;
-        $managerId = null;
-        $managerName = trim($input['manager_name'] ?? 'Unassigned');
-        $managerEmail = trim($input['manager_email'] ?? '');
-
-        if (!empty($input['manager_name']) && !empty($input['manager_password'])) {
-            $managerId = 'adm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-            $managerEmail = $managerEmail ?: "manager_" . time() . "@codexdynamics.com";
-            $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
-            $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, team_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, 'Office Manager', ?, NULL, 'Active', ?, ?)")
-                ->execute([$managerId, $managerEmail, $input['manager_password'], $managerName, $id, $caps, $now]);
-            $manager = ['id' => $managerId, 'name' => $managerName, 'email' => $managerEmail, 'role' => 'Office Manager', 'office_id' => $id];
-        }
-
-        $pdo->prepare("INSERT INTO offices (id, name, manager_id, manager_name, manager_email, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-            ->execute([$id, $name, $managerId, $managerName, $managerEmail, $now]);
-        $createdOffice = ['id' => $id, 'name' => $name, 'manager_id' => $managerId, 'manager_name' => $managerName, 'manager_email' => $managerEmail, 'team_count' => 0, 'agent_count' => 0, 'lead_count' => 0, 'created_at' => $now];
-        jsonResponse(['ok' => true, 'office' => $createdOffice, 'manager' => $manager]);
-    }
-
-    $offices = $pdo->query("SELECT * FROM offices ORDER BY created_at DESC")->fetchAll();
-    foreach ($offices as &$o) {
-        $stmtT = $pdo->prepare("SELECT COUNT(*) FROM teams WHERE office_id = ?");
-        $stmtT->execute([$o['id']]);
-        $o['team_count'] = (int)$stmtT->fetchColumn();
-
-        $stmtA = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE office_id = ? AND role = 'Agent'");
-        $stmtA->execute([$o['id']]);
-        $o['agent_count'] = (int)$stmtA->fetchColumn();
-
-        $stmtL = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE assigned_office_id = ?");
-        $stmtL->execute([$o['id']]);
-        $o['lead_count'] = (int)$stmtL->fetchColumn();
-    }
-    jsonResponse(['ok' => true, 'offices' => $offices]);
-}
-
-if (preg_match('#^/admin/offices/([^/]+)(?:/(manager))?$#', $apiPath, $m)) {
-    $officeId = $m[1];
-    $sub = $m[2] ?? '';
-
-    if ($sub === 'manager' && $method === 'POST') {
-        $managerId = $input['manager_id'] ?? '';
-        $stmtM = $pdo->prepare("SELECT * FROM staff_users WHERE id = ?");
-        $stmtM->execute([$managerId]);
-        $mgr = $stmtM->fetch();
-        if ($mgr) {
-            $pdo->prepare("UPDATE offices SET manager_id = ?, manager_name = ?, manager_email = ? WHERE id = ?")->execute([$mgr['id'], $mgr['name'], $mgr['email'], $officeId]);
-            $pdo->prepare("UPDATE staff_users SET office_id = ? WHERE id = ?")->execute([$officeId, $mgr['id']]);
-        }
-        $stmtO = $pdo->prepare("SELECT * FROM offices WHERE id = ?");
-        $stmtO->execute([$officeId]);
-        jsonResponse(['ok' => true, 'office' => $stmtO->fetch(), 'manager' => $mgr]);
-    }
-
-    if ($method === 'PATCH') {
-        if (!empty($input['name'])) {
-            $pdo->prepare("UPDATE offices SET name = ? WHERE id = ?")->execute([$input['name'], $officeId]);
-        }
-        $stmtO = $pdo->prepare("SELECT * FROM offices WHERE id = ?");
-        $stmtO->execute([$officeId]);
-        jsonResponse(['ok' => true, 'office' => $stmtO->fetch()]);
-    }
-
-    if ($method === 'DELETE') {
-        $pdo->prepare("DELETE FROM offices WHERE id = ?")->execute([$officeId]);
-        jsonResponse(['ok' => true]);
-    }
-}
-
 // -----------------------------------------------------------------------------
 // 10. ADMIN: TEAMS MANAGEMENT
 // -----------------------------------------------------------------------------
@@ -3189,61 +3114,7 @@ if (preg_match('#^/admin/teams/([^/]+)$#', $apiPath, $m)) {
         }
         jsonResponse(['ok' => true, 'deleted_at' => $now, 'staff_ids' => $staffIds, 'lead_ids' => $leadIds]);
     }
-}
-
-if ($apiPath === '/admin/teams') {
-    if ($method === 'POST') {
-        $id = 'tm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-        $name = trim($input['name'] ?? 'New Team');
-        $officeId = $input['office_id'] ?? null;
-        $maxSize = (int)($input['max_size'] ?? 10);
-        $now = date('c');
-        $leader = null;
-        $leaderId = null;
-        $leaderName = trim($input['leader_name'] ?? 'Unassigned');
-        $leaderEmail = trim($input['leader_email'] ?? '');
-
-        if (!empty($input['leader_name']) && !empty($input['leader_password'])) {
-            $leaderId = 'adm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-            $leaderEmail = $leaderEmail ?: "leader_" . time() . "@codexdynamics.com";
-            $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
-            $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, team_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, 'Team Leader', ?, ?, 'Active', ?, ?)")
-                ->execute([$leaderId, $leaderEmail, $input['leader_password'], $leaderName, $officeId, $id, $caps, $now]);
-            $leader = ['id' => $leaderId, 'name' => $leaderName, 'email' => $leaderEmail, 'role' => 'Team Leader', 'office_id' => $officeId, 'team_id' => $id];
-        }
-
-        $pdo->prepare("INSERT INTO teams (id, name, office_id, leader_id, leader_name, max_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            ->execute([$id, $name, $officeId, $leaderId, $leaderName, $maxSize, $now]);
-        $createdTeam = ['id' => $id, 'name' => $name, 'office_id' => $officeId, 'leader_id' => $leaderId, 'leader_name' => $leaderName, 'max_size' => $maxSize, 'agent_count' => 0, 'lead_count' => 0, 'created_at' => $now];
-        jsonResponse(['ok' => true, 'team' => $createdTeam, 'leader' => $leader]);
-    }
-
-    $teams = $pdo->query("SELECT * FROM teams ORDER BY created_at DESC")->fetchAll();
-    foreach ($teams as &$t) {
-        $stmtA = $pdo->prepare("SELECT COUNT(*) FROM staff_users WHERE team_id = ? AND role = 'Agent'");
-        $stmtA->execute([$t['id']]);
-        $t['agent_count'] = (int)$stmtA->fetchColumn();
-
-        $stmtL = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE assigned_team_id = ?");
-        $stmtL->execute([$t['id']]);
-        $t['lead_count'] = (int)$stmtL->fetchColumn();
-    }
-    jsonResponse(['ok' => true, 'teams' => $teams]);
-}
-
-if (preg_match('#^/admin/teams/([^/]+)$#', $apiPath, $m)) {
-    $teamId = $m[1];
-    if ($method === 'PATCH') {
-        if (!empty($input['name'])) $pdo->prepare("UPDATE teams SET name = ? WHERE id = ?")->execute([$input['name'], $teamId]);
-        if (isset($input['max_size'])) $pdo->prepare("UPDATE teams SET max_size = ? WHERE id = ?")->execute([(int)$input['max_size'], $teamId]);
-        $stmtT = $pdo->prepare("SELECT * FROM teams WHERE id = ?");
-        $stmtT->execute([$teamId]);
-        jsonResponse(['ok' => true, 'team' => $stmtT->fetch()]);
-    }
-    if ($method === 'DELETE') {
-        $pdo->prepare("DELETE FROM teams WHERE id = ?")->execute([$teamId]);
-        jsonResponse(['ok' => true]);
-    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
 // -----------------------------------------------------------------------------
@@ -3586,63 +3457,7 @@ if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
         }
         jsonResponse(['ok' => true, 'deleted_at' => $now, 'lead_ids' => $leadIds]);
     }
-}
-
-if ($apiPath === '/admin/staff') {
-    if ($method === 'POST') {
-        $id = 'adm_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-        $name = trim($input['name'] ?? 'New Staff');
-        $email = strtolower(trim($input['email'] ?? "agent_" . time() . "@codexdynamics.com"));
-        $password = trim($input['password'] ?? 'admin123');
-        $role = $input['role'] ?? 'Agent';
-        $teamId = $input['team_id'] ?? null;
-        $officeId = $input['office_id'] ?? null;
-        if ($teamId && !$officeId) {
-            $stmtTm = $pdo->prepare("SELECT office_id FROM teams WHERE id = ?");
-            $stmtTm->execute([$teamId]);
-            $officeId = $stmtTm->fetchColumn() ?: null;
-        }
-        $now = date('c');
-        $caps = json_encode(['lead_upload' => true, 'create_agent' => true, 'registrations' => true, 'notifications' => true, 'content' => true, 'enquiries' => true, 'chat' => true]);
-        $pdo->prepare("INSERT INTO staff_users (id, email, password, name, role, office_id, team_id, status, capabilities, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)")
-            ->execute([$id, $email, $password, $name, $role, $officeId, $teamId, $caps, $now]);
-        jsonResponse(['ok' => true, 'staff' => ['id' => $id, 'name' => $name, 'email' => $email, 'role' => $role, 'office_id' => $officeId, 'team_id' => $teamId, 'status' => 'Active', 'capabilities' => json_decode($caps, true), 'created_at' => $now]]);
-    }
-
-    $staff = $pdo->query("SELECT id, email, name, role, office_id, team_id, status, capabilities, last_login_at, created_at FROM staff_users ORDER BY name ASC")->fetchAll();
-    foreach ($staff as &$s) {
-        if (!empty($s['capabilities']) && is_string($s['capabilities'])) {
-            $s['capabilities'] = json_decode($s['capabilities'], true);
-        }
-    }
-    jsonResponse(['ok' => true, 'staff' => $staff]);
-}
-
-if (preg_match('#^/admin/staff/([^/]+)(?:/(block|unblock))?$#', $apiPath, $m)) {
-    $staffId = $m[1];
-    $action = $m[2] ?? '';
-    if ($action === 'block' && $method === 'POST') {
-        $pdo->prepare("UPDATE staff_users SET status = 'Suspended' WHERE id = ?")->execute([$staffId]);
-        $stmtS = $pdo->prepare("SELECT * FROM staff_users WHERE id = ?");
-        $stmtS->execute([$staffId]);
-        jsonResponse(['ok' => true, 'staff' => $stmtS->fetch()]);
-    }
-    if ($action === 'unblock' && $method === 'POST') {
-        $pdo->prepare("UPDATE staff_users SET status = 'Active' WHERE id = ?")->execute([$staffId]);
-        $stmtS = $pdo->prepare("SELECT * FROM staff_users WHERE id = ?");
-        $stmtS->execute([$staffId]);
-        jsonResponse(['ok' => true, 'staff' => $stmtS->fetch()]);
-    }
-    if ($method === 'PATCH') {
-        if (!empty($input['name'])) $pdo->prepare("UPDATE staff_users SET name = ? WHERE id = ?")->execute([$input['name'], $staffId]);
-        if (!empty($input['email'])) $pdo->prepare("UPDATE staff_users SET email = ? WHERE id = ?")->execute([$input['email'], $staffId]);
-        if (!empty($input['password'])) $pdo->prepare("UPDATE staff_users SET password = ? WHERE id = ?")->execute([$input['password'], $staffId]);
-        if (array_key_exists('team_id', $input)) $pdo->prepare("UPDATE staff_users SET team_id = ? WHERE id = ?")->execute([$input['team_id'], $staffId]);
-        if (array_key_exists('office_id', $input)) $pdo->prepare("UPDATE staff_users SET office_id = ? WHERE id = ?")->execute([$input['office_id'], $staffId]);
-        $stmtS = $pdo->prepare("SELECT * FROM staff_users WHERE id = ?");
-        $stmtS->execute([$staffId]);
-        jsonResponse(['ok' => true, 'staff' => $stmtS->fetch()]);
-    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
 
 // -----------------------------------------------------------------------------
