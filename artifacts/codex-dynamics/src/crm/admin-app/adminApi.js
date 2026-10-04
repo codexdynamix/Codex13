@@ -571,7 +571,7 @@ export async function getClientMailboxesAdmin(clientId) { const d = await adminF
 export async function assignClientMailboxAdmin(clientId, payload) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes`, { method: 'POST', body: payload }); }
 export async function updateClientMailboxAdmin(clientId, assignmentId, payload) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', body: payload }); }
 export async function removeClientMailboxAdmin(clientId, assignmentId) { return adminFetch(`/api/admin/clients/${encodeURIComponent(clientId)}/mailboxes/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' }); }
-export async function reassignClientMailboxAdmin(assignmentId, targetClientId, displayName) { return adminFetch(`/api/admin/client-mailboxes/${encodeURIComponent(assignmentId)}/reassign`, { method: 'POST', body: { targetClientId, ...(displayName ? { displayName } : {}) } }); }
+export async function reassignClientMailboxAdmin(assignmentId, targetClientId, displayName) { return adminFetch(`/api/admin/client-mailboxes/${encodeURIComponent(assignmentId)}/reassign`, { method: 'POST', body: { targetClientId, confirmed: true, ...(displayName ? { displayName } : {}) } }); }
 
 export async function getClientWorkspaceAdmin(userId) {
   const data = await adminFetch(`/api/admin/client-workspaces/${encodeURIComponent(userId)}`);

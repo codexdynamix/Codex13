@@ -540,5 +540,27 @@ test('Hostinger mail access is client-scoped and integration responses redact th
     assert.equal(sendRequest?.body.displayName, 'Alpha Info');
     assert.deepEqual(sendRequest?.body.to, ['recipient@example.test']);
     assert.equal(sendRequest?.body.text, 'This request is intercepted by the local provider test server.');
+
+    const unconfirmedTransfer = await requestJson('/api/admin/client-mailboxes/mailbox_alpha/reassign', {
+      token: superAdminToken,
+      method: 'POST',
+      body: { targetClientId: 'client_beta', displayName: 'Beta Support' },
+    });
+    assert.equal(unconfirmedTransfer.response.status, 422);
+
+    const transferred = await requestJson('/api/admin/client-mailboxes/mailbox_alpha/reassign', {
+      token: superAdminToken,
+      method: 'POST',
+      body: { targetClientId: 'client_beta', displayName: 'Beta Support', confirmed: true },
+    });
+    assert.equal(transferred.response.status, 200, JSON.stringify(transferred.data));
+
+    const alphaAfterTransfer = await requestJson('/api/portal/mailboxes', { token: clientAlphaToken });
+    const betaAfterTransfer = await requestJson('/api/portal/mailboxes', { token: clientBetaToken });
+    assert.deepEqual(alphaAfterTransfer.data.mailboxes, []);
+    assert.deepEqual(
+      betaAfterTransfer.data.mailboxes.map((mailbox) => [mailbox.providerMailboxId, mailbox.displayName]),
+      [['ACclientAlpha123', 'Beta Support'], ['ACclientBeta456', 'Beta Info']],
+    );
   });
 });
