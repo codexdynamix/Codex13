@@ -2690,6 +2690,9 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
     { name: 'Client Management', icon: faUsers },
     { name: 'Staff', icon: faUsers },
     { name: 'Accounting', icon: faFileInvoiceDollar },
+    { name: 'Mail', icon: faComments },
+    { name: 'Security & System', icon: faKey },
+    { name: 'SEO & Search', icon: faGlobe },
     { name: 'Sessions', icon: faUsers },
     { name: 'Recycle Bin', icon: faTrash },
     { name: 'Site Settings', icon: faCog },
@@ -3298,6 +3301,12 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
               </div>
             ) : activeTab === 'Accounting' ? (
               <AccountingWorkspace showNotification={showPanelNotification} />
+            ) : activeTab === 'Mail' ? (
+              <SiteSettingsTab showNotification={showNotification} initialSubTab="hostinger-mail" standaloneSection />
+            ) : activeTab === 'Security & System' ? (
+              <SiteSettingsTab showNotification={showNotification} initialSubTab="security" standaloneSection />
+            ) : activeTab === 'SEO & Search' ? (
+              <SiteSettingsTab showNotification={showNotification} initialSubTab="seo" standaloneSection />
             ) : activeTab === 'Staff' ? (
               <div style={{ padding: 24 }}>
                 <div className="crm-tab-row" style={{ marginBottom: 18 }}>

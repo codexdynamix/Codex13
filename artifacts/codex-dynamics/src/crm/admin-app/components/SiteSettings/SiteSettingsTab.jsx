@@ -220,9 +220,6 @@ const SUB_TABS = [
   { id: 'layout', label: 'Layout & Modules', icon: Layout },
   { id: 'contacts', label: 'Contact Channels', icon: Phone },
   { id: 'socials', label: 'Header Socials', icon: Share2 },
-  { id: 'seo', label: 'SEO & Search', icon: Search },
-  { id: 'security', label: 'Security & System', icon: Shield },
-  { id: 'hostinger-mail', label: 'Hostinger Mail', icon: Mail },
 ];
 
 const RADIUS_OPTIONS = [
@@ -264,9 +261,9 @@ const HEADER_OPTIONS = [
   { id: 'sticky', label: 'Sticky Top Header', desc: 'Header pinned to top on scroll with subtle border' },
 ];
 
-export default function SiteSettingsTab({ showNotification = () => {} }) {
+export default function SiteSettingsTab({ showNotification = () => {}, initialSubTab = 'layout', standaloneSection = false }) {
   const platformSettings = usePlatformSettings();
-  const [activeSubTab, setActiveSubTab] = useState('layout');
+  const [activeSubTab, setActiveSubTab] = useState(initialSubTab);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
@@ -1481,78 +1478,92 @@ export default function SiteSettingsTab({ showNotification = () => {} }) {
         <div className="crm-site-settings-title-group">
           <h2>
             <span className="crm-title-icon">⚙</span>
-            Site & Platform Settings
+            {standaloneSection
+              ? activeSubTab === 'hostinger-mail' ? 'Mail' : activeSubTab === 'security' ? 'Security & System' : 'SEO & Search'
+              : 'Site & Platform Settings'}
           </h2>
           <p>
-            Configure public website visual identity, communication endpoints, page section sequence, and CRM security invariants.
+            {standaloneSection
+              ? activeSubTab === 'hostinger-mail'
+                ? 'Manage the global Hostinger Mail integration and client mailbox assignments.'
+                : activeSubTab === 'security'
+                  ? 'Configure authentication controls, administrator access, and system security.'
+                  : 'Manage search metadata, indexing, and social-sharing previews.'
+              : 'Configure public website visual identity, communication endpoints, page section sequence, and CRM security invariants.'}
           </p>
         </div>
 
         <div className="crm-site-settings-actions">
-          {hasUnsavedChanges ? (
-            <div className="crm-status-pill unsaved">
-              <span className="crm-status-pulse" />
-              Unsaved Changes
-            </div>
-          ) : (
-            <div className="crm-status-pill saved">
-              <Check size={13} strokeWidth={2.5} />
-              Synced & Live
-            </div>
+          {activeSubTab !== 'hostinger-mail' && (
+            <>
+              {hasUnsavedChanges ? (
+                <div className="crm-status-pill unsaved">
+                  <span className="crm-status-pulse" />
+                  Unsaved Changes
+                </div>
+              ) : (
+                <div className="crm-status-pill saved">
+                  <Check size={13} strokeWidth={2.5} />
+                  Synced & Live
+                </div>
+              )}
+
+              {!standaloneSection && (
+                <button
+                  type="button"
+                  className="crm-btn-secondary"
+                  onClick={handleResetToDefaults}
+                  title="Revert form to factory defaults"
+                >
+                  <RotateCcw size={13} />
+                  <span>Reset</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="crm-btn-primary"
+                onClick={handleSaveAll}
+                disabled={saving}
+              >
+                <Save size={14} />
+                <span>{saving ? 'Publishing...' : 'Save All Changes'}</span>
+              </button>
+            </>
           )}
-
-          <button
-            type="button"
-            className="crm-btn-secondary"
-            onClick={handleResetToDefaults}
-            title="Revert form to factory defaults"
-          >
-            <RotateCcw size={13} />
-            <span>Reset</span>
-          </button>
-
-          <button
-            type="button"
-            className="crm-btn-primary"
-            onClick={handleSaveAll}
-            disabled={saving}
-          >
-            <Save size={14} />
-            <span>{saving ? 'Publishing...' : 'Save All Changes'}</span>
-          </button>
         </div>
       </div>
 
       {/* ── Sub-Tabs Navigation Bar ────────────────────────────── */}
-      <nav className="crm-settings-tab-bar" aria-label="Site settings sub-navigation">
-        {SUB_TABS.map(tab => {
-          const Icon = tab.icon;
-          const isActive = activeSubTab === tab.id;
-          let badgeText = '';
-          if (tab.id === 'layout') badgeText = '6 Modules';
-          if (tab.id === 'contacts') badgeText = `${siteConfig.socialContacts?.length || 0}`;
-          if (tab.id === 'socials') badgeText = `${Object.values(siteConfig.headerSocials || {}).filter(s => s.enabled).length} Active`;
-          if (tab.id === 'seo') badgeText = 'SERP Ready';
-          if (tab.id === 'security') badgeText = siteConfig.security?.twoFactorAuthEnabled ? '2FA Active' : 'RBAC';
+      {!standaloneSection && (
+        <nav className="crm-settings-tab-bar" aria-label="Site settings sub-navigation">
+          {SUB_TABS.map(tab => {
+            const Icon = tab.icon;
+            const isActive = activeSubTab === tab.id;
+            let badgeText = '';
+            if (tab.id === 'layout') badgeText = '6 Modules';
+            if (tab.id === 'contacts') badgeText = `${siteConfig.socialContacts?.length || 0}`;
+            if (tab.id === 'socials') badgeText = `${Object.values(siteConfig.headerSocials || {}).filter(s => s.enabled).length} Active`;
 
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              className={`crm-settings-tab-btn ${isActive ? 'active' : ''}`}
-              onClick={() => setActiveSubTab(tab.id)}
-            >
-              <Icon size={14} />
-              <span>{tab.label}</span>
-              {badgeText && (
-                <span className={`crm-tab-count-pill ${isActive ? 'active' : ''}`}>
-                  {badgeText}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                className={`crm-settings-tab-btn ${isActive ? 'active' : ''}`}
+                onClick={() => setActiveSubTab(tab.id)}
+              >
+                <Icon size={14} />
+                <span>{tab.label}</span>
+                {badgeText && (
+                  <span className={`crm-tab-count-pill ${isActive ? 'active' : ''}`}>
+                    {badgeText}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      )}
 
       {activeSubTab === 'hostinger-mail' && <HostingerMailSettings />}
 
