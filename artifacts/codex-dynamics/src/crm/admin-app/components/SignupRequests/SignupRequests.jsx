@@ -80,6 +80,8 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
   const [assignAgent, setAssignAgent] = useState('');
   const [assignOffice, setAssignOffice] = useState('');
   const [assignTeam, setAssignTeam] = useState('');
+  const [candidateClients, setCandidateClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
   const [rejectMsg, setRejectMsg] = useState('');
   const [selectedReason, setSelectedReason] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -109,6 +111,8 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
     setAssignAgent('');
     setAssignOffice('');
     setAssignTeam('');
+    setCandidateClients([]);
+    setSelectedClientId('');
     setErr('');
   };
 
@@ -124,6 +128,10 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
       setErr('Set a 6-digit verification code to send to the client.');
       return;
     }
+    if (candidateClients.length > 0 && !selectedClientId) {
+      setErr('Select the existing Client record that this signup belongs to.');
+      return;
+    }
     setBusy(true);
     setErr('');
     try {
@@ -132,13 +140,17 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
         agent_id: assignAgent || undefined,
         assigned_office_id: assignOffice || undefined,
         assigned_team_id: assignTeam || undefined,
+        client_id: selectedClientId || undefined,
       });
-      if (result?.lead && onLeadCreated) onLeadCreated(result.lead);
+      if (result?.client && onLeadCreated) onLeadCreated(result.client);
       showNotification?.(`Approved ${action.item.email} - share verification code with client.`);
       setAction(null);
       load();
     } catch (e) {
       setErr(e?.message || 'Approve failed');
+      if (e?.code === 'CLIENT_IDENTITY_SELECTION_REQUIRED') {
+        setCandidateClients(Array.isArray(e.candidateClients) ? e.candidateClients : []);
+      }
     } finally {
       setBusy(false);
     }
@@ -197,7 +209,7 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
         <div>
           <h2 style={{ margin: 0, color: 'var(--crm-text-primary)', fontSize: 20 }}>Client registrations</h2>
           <p style={{ margin: '4px 0 0', color: 'var(--crm-text-secondary)', fontSize: 13 }}>
-            Review signup requests, approve to create leads, and set the email verification code the client will enter.
+            Review signup requests, link each signup to the correct Client record, and set the verification code.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -257,6 +269,28 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
                     />
                   )}
 
+                  {candidateClients.length > 0 && (
+                    <>
+                      <p className="dr-modal__subtitle" style={{ marginTop: 14 }}>
+                        This email already belongs to existing Client records. Choose the correct record; email alone will not merge identities.
+                      </p>
+                      <label className="dr-modal__label" htmlFor="signup-client-match">Existing Client record</label>
+                      <select
+                        id="signup-client-match"
+                        className="dr-modal__input"
+                        value={selectedClientId}
+                        onChange={(e) => { setSelectedClientId(e.target.value); setErr(''); }}
+                      >
+                        <option value="">Choose a Client record</option>
+                        {candidateClients.map((client) => (
+                          <option key={client.id} value={client.id}>
+                            {[client.name || 'Unnamed Client', client.company, `ID: ${client.id}`].filter(Boolean).join(' · ')}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+
                   <label className="dr-modal__label" style={{ marginTop: 14 }}>Assign to agent (optional)</label>
                   <select className="dr-modal__input" value={assignAgent} onChange={(e) => setAssignAgent(e.target.value)}>
                     <option value="">- Unassigned -</option>
@@ -299,7 +333,7 @@ export default function SignupRequests({ data, onLeadCreated, showNotification }
                   disabled={busy}
                   onClick={action.mode === 'approve' ? handleApprove : handleReject}
                 >
-                  {busy ? 'Processing...' : action.mode === 'approve' ? 'Approve & create lead' : 'Decline registration'}
+                  {busy ? 'Processing...' : action.mode === 'approve' ? 'Approve & create Client' : 'Decline registration'}
                 </button>
               </div>
             </div>

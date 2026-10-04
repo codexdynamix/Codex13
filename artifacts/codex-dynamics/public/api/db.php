@@ -110,6 +110,236 @@ function ensureDatabaseColumn(PDO $pdo, string $table, string $column, string $d
     }
 }
 
+function databaseObjectType(PDO $pdo, string $name): ?string {
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        $stmt = $pdo->prepare("SELECT type FROM sqlite_master WHERE name = ? LIMIT 1");
+        $stmt->execute([$name]);
+        $type = $stmt->fetchColumn();
+        return $type === false ? null : (string)$type;
+    }
+    $stmt = $pdo->prepare('SELECT TABLE_TYPE FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1');
+    $stmt->execute([$name]);
+    $type = $stmt->fetchColumn();
+    return $type === false ? null : (strtolower((string)$type) === 'view' ? 'view' : 'table');
+}
+
+function databaseColumnNames(PDO $pdo, string $table): array {
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+        throw new InvalidArgumentException('Invalid schema identifier.');
+    }
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        return array_column($pdo->query("PRAGMA table_info(`{$table}`)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+    }
+    return array_column($pdo->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(PDO::FETCH_ASSOC), 'Field');
+}
+
+function createLegacyClientCompatibilityView(PDO $pdo): void {
+    if (databaseObjectType($pdo, 'leads') !== null) return;
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $pdo->exec('CREATE VIEW leads AS SELECT * FROM clients');
+    if ($driver !== 'sqlite') return;
+
+    $columns = databaseColumnNames($pdo, 'clients');
+    $quotedColumns = implode(', ', array_map(static fn(string $column): string => "`{$column}`", $columns));
+    $newValues = [];
+    foreach ($columns as $column) {
+        $value = "NEW.`{$column}`";
+        if ($column === 'stage' || $column === 'status') $value = "COALESCE(NEW.`{$column}`, 'New')";
+        if ($column === 'country') $value = "COALESCE(NEW.`{$column}`, 'United Kingdom')";
+        if ($column === 'country_code') $value = "COALESCE(NEW.`{$column}`, 'GB')";
+        if ($column === 'funnel') $value = "COALESCE(NEW.`{$column}`, 'General')";
+        if ($column === 'source') $value = "COALESCE(NEW.`{$column}`, 'direct')";
+        if ($column === 'appointments' || $column === 'comment_history' || $column === 'status_history') {
+            $value = "COALESCE(NEW.`{$column}`, '[]')";
+        }
+        $newValues[] = $value;
+    }
+    $updates = [];
+    foreach ($columns as $column) {
+        if ($column === 'id') continue;
+        $updates[] = "`{$column}` = NEW.`{$column}`";
+    }
+
+    $pdo->exec("CREATE TRIGGER leads_compat_insert INSTEAD OF INSERT ON leads BEGIN
+        INSERT INTO clients ({$quotedColumns}) VALUES (" . implode(', ', $newValues) . ");
+    END");
+    $pdo->exec("CREATE TRIGGER leads_compat_update INSTEAD OF UPDATE ON leads BEGIN
+        UPDATE clients SET " . implode(', ', $updates) . " WHERE id = OLD.id;
+    END");
+    $pdo->exec("CREATE TRIGGER leads_compat_delete INSTEAD OF DELETE ON leads BEGIN
+        DELETE FROM clients WHERE id = OLD.id;
+    END");
+}
+
+function migrateLegacyClientIdentity(PDO $pdo): void {
+    $migrationId = 'canonical_clients_and_portal_access_v1';
+    $check = $pdo->prepare('SELECT id FROM schema_migrations WHERE id = ?');
+    $check->execute([$migrationId]);
+    if (!$check->fetchColumn()) {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $legacyLeadType = databaseObjectType($pdo, 'leads');
+        if ($legacyLeadType === 'table') {
+            $legacyColumns = databaseColumnNames($pdo, 'leads');
+            $clientColumns = array_flip(databaseColumnNames($pdo, 'clients'));
+            $copyColumns = array_values(array_filter($legacyColumns, static fn(string $column): bool =>
+                isset($clientColumns[$column]) && $column !== 'client_password'
+            ));
+            $quoted = implode(', ', array_map(static fn(string $column): string => "`{$column}`", $copyColumns));
+            $rows = $pdo->query("SELECT {$quoted}, " . (in_array('client_password', $legacyColumns, true) ? '`client_password`' : "'' AS `client_password`") . " FROM leads")->fetchAll(PDO::FETCH_ASSOC);
+            $insert = $pdo->prepare("INSERT INTO clients ({$quoted}) VALUES (" . implode(', ', array_fill(0, count($copyColumns), '?')) . ")");
+            $findClient = $pdo->prepare('SELECT id FROM clients WHERE id = ?');
+            $legacyPasswordRows = [];
+            foreach ($rows as $row) {
+                $findClient->execute([$row['id']]);
+                if (!$findClient->fetchColumn()) {
+                    $insert->execute(array_map(static fn(string $column) => $row[$column] ?? null, $copyColumns));
+                }
+                if (trim((string)($row['client_password'] ?? '')) !== '') $legacyPasswordRows[] = $row;
+            }
+            if ($driver === 'sqlite') {
+                $pdo->exec('ALTER TABLE leads RENAME TO legacy_leads');
+            } else {
+                $pdo->exec('RENAME TABLE leads TO legacy_leads');
+            }
+
+            $saveLegacyPassword = $pdo->prepare('UPDATE legacy_leads SET client_password = NULL WHERE id = ?');
+            foreach ($legacyPasswordRows as $row) {
+                $legacyPassword = (string)$row['client_password'];
+                $passwordInfo = password_get_info($legacyPassword);
+                $passwordHash = ($passwordInfo['algo'] ?? null) !== null
+                    ? $legacyPassword
+                    : password_hash($legacyPassword, PASSWORD_DEFAULT);
+                if ($passwordHash === false) throw new RuntimeException('Could not securely migrate a legacy portal password.');
+                $access = $pdo->prepare('SELECT client_id FROM client_portal_access WHERE client_id = ?');
+                $access->execute([(string)$row['id']]);
+                if (!$access->fetchColumn()) {
+                    $pdo->prepare("INSERT INTO client_portal_access (client_id, password_hash, status, portal_enabled, created_at)
+                        VALUES (?, ?, 'Active', 1, ?)")
+                        ->execute([(string)$row['id'], $passwordHash, (string)($row['created_at'] ?? date('c'))]);
+                }
+                $saveLegacyPassword->execute([(string)$row['id']]);
+            }
+        }
+
+        if (databaseObjectType($pdo, 'legacy_portal_clients') === null && databaseObjectType($pdo, 'portal_clients') === 'table') {
+            $portalRows = $pdo->query('SELECT * FROM portal_clients')->fetchAll(PDO::FETCH_ASSOC);
+            $clientColumns = array_flip(databaseColumnNames($pdo, 'clients'));
+            $findClient = $pdo->prepare('SELECT id FROM clients WHERE id = ?');
+            $insertClient = $pdo->prepare('INSERT INTO clients (id, first_name, last_name, name, email, phone, address, country, country_code, company, stage, status, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            $savePortal = $pdo->prepare('INSERT INTO client_portal_access
+                (client_id, password_hash, status, portal_enabled, tier, last_login_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)');
+            $hasPortalAccess = $pdo->prepare('SELECT client_id FROM client_portal_access WHERE client_id = ?');
+            foreach ($portalRows as $row) {
+                $clientId = (string)$row['id'];
+                $findClient->execute([$clientId]);
+                if (!$findClient->fetchColumn()) {
+                    $name = trim((string)($row['name'] ?? ''));
+                    $nameParts = preg_split('/\s+/', $name, 2) ?: [];
+                    $insertClient->execute([
+                        $clientId,
+                        $nameParts[0] ?? '',
+                        $nameParts[1] ?? '',
+                        $name,
+                        $row['email'] ?? null,
+                        $row['phone'] ?? null,
+                        $row['address'] ?? null,
+                        $row['country'] ?? 'United Kingdom',
+                        $row['country_code'] ?? 'GB',
+                        $row['company'] ?? null,
+                        'Active',
+                        $row['status'] ?? 'Active',
+                        'portal_migration',
+                        $row['created_at'] ?? date('c'),
+                        $row['created_at'] ?? date('c'),
+                    ]);
+                } else {
+                    $client = $pdo->prepare('SELECT name, company, email, phone FROM clients WHERE id = ?');
+                    $client->execute([$clientId]);
+                    $existing = $client->fetch(PDO::FETCH_ASSOC) ?: [];
+                    $updates = [];
+                    $params = [];
+                    foreach (['name', 'company', 'email', 'phone', 'address'] as $field) {
+                        if (empty($existing[$field]) && !empty($row[$field]) && isset($clientColumns[$field])) {
+                            $updates[] = "`{$field}` = ?";
+                            $params[] = $row[$field];
+                        }
+                    }
+                    if ($updates) {
+                        $params[] = $clientId;
+                        $pdo->prepare('UPDATE clients SET ' . implode(', ', $updates) . ' WHERE id = ?')->execute($params);
+                    }
+                }
+                $passwordInfo = password_get_info((string)($row['password'] ?? ''));
+                $passwordHash = trim((string)($row['password'] ?? '')) === ''
+                    ? ''
+                    : ((($passwordInfo['algo'] ?? null) !== null) ? (string)$row['password'] : (string)(password_hash((string)$row['password'], PASSWORD_DEFAULT) ?: ''));
+                $hasPortalAccess->execute([$clientId]);
+                if ($hasPortalAccess->fetchColumn()) {
+                    $accessPassword = $passwordHash !== '' ? $passwordHash : null;
+                    $pdo->prepare("UPDATE client_portal_access SET
+                        password_hash = COALESCE(?, password_hash),
+                        status = ?, portal_enabled = ?, tier = ?, last_login_at = ?
+                        WHERE client_id = ?")
+                        ->execute([
+                            $accessPassword,
+                            (string)($row['status'] ?? 'Active'),
+                            (int)($row['portal_enabled'] ?? 1),
+                            $row['tier'] ?? null,
+                            $row['last_login_at'] ?? null,
+                            $clientId,
+                        ]);
+                } else {
+                    $savePortal->execute([
+                        $clientId,
+                        $passwordHash,
+                        (string)($row['status'] ?? 'Active'),
+                        (int)($row['portal_enabled'] ?? 1),
+                        $row['tier'] ?? null,
+                        $row['last_login_at'] ?? null,
+                        $row['created_at'] ?? date('c'),
+                    ]);
+                }
+            }
+            if ($driver === 'sqlite') {
+                $pdo->exec('ALTER TABLE portal_clients RENAME TO legacy_portal_clients');
+            } else {
+                $pdo->exec('RENAME TABLE portal_clients TO legacy_portal_clients');
+            }
+        }
+
+        if ($driver === 'sqlite') {
+            $duplicatePairs = $pdo->prepare("INSERT OR IGNORE INTO client_identity_reviews (client_id_a, client_id_b, reason, status, created_at)
+                SELECT a.id, b.id, 'Duplicate normalized email in legacy records; identity was not merged.', 'pending', ?
+                FROM clients a
+                JOIN clients b ON a.id < b.id
+                  AND LOWER(TRIM(COALESCE(a.email, ''))) = LOWER(TRIM(COALESCE(b.email, '')))
+                WHERE TRIM(COALESCE(a.email, '')) <> ''");
+            $duplicatePairs->execute([date('c')]);
+        } else {
+            $duplicateGroups = $pdo->query("SELECT LOWER(TRIM(email)) AS normalized_email
+                FROM clients WHERE email IS NOT NULL AND TRIM(email) <> ''
+                GROUP BY LOWER(TRIM(email)) HAVING COUNT(*) > 1")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($duplicateGroups as $email) {
+                $stmt = $pdo->prepare("SELECT id FROM clients WHERE LOWER(TRIM(email)) = ? ORDER BY id");
+                $stmt->execute([$email]);
+                $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                for ($i = 0; $i < count($ids); $i++) {
+                    for ($j = $i + 1; $j < count($ids); $j++) {
+                        $pdo->prepare("INSERT INTO client_identity_reviews (client_id_a, client_id_b, reason, status, created_at)
+                            VALUES (?, ?, 'Duplicate normalized email in legacy records; identity was not merged.', 'pending', ?)")
+                            ->execute([$ids[$i], $ids[$j], date('c')]);
+                    }
+                }
+            }
+        }
+        $pdo->prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)')->execute([$migrationId, date('c')]);
+    }
+
+    createLegacyClientCompatibilityView($pdo);
+}
+
 function initSchema(PDO $pdo): void {
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS platform_settings (
@@ -129,15 +359,16 @@ function initSchema(PDO $pdo): void {
         )
     ");
 
-    // 1. Leads Table
+    // Canonical Client identity. The leads view is retained temporarily for old integrations.
     $pdo->exec("
-        CREATE TABLE IF NOT EXISTS leads (
-            id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS clients (
+            id VARCHAR(191) PRIMARY KEY,
             first_name TEXT,
             last_name TEXT,
             name TEXT,
             email TEXT,
             phone TEXT,
+            address TEXT,
             country TEXT DEFAULT 'United Kingdom',
             country_code TEXT DEFAULT 'GB',
             stage TEXT DEFAULT 'New',
@@ -150,7 +381,6 @@ function initSchema(PDO $pdo): void {
             message TEXT,
             source TEXT DEFAULT 'direct',
             notes TEXT,
-            client_password TEXT,
             assigned_office_id TEXT,
             assigned_team_id TEXT,
             assigned_team_leader_id TEXT,
@@ -165,50 +395,54 @@ function initSchema(PDO $pdo): void {
             updated_at TEXT
         );
     ");
-    // Keep soft-deleted leads out of the active CRM while allowing admins to
+    // Keep soft-deleted Clients out of the active CRM while allowing admins to
     // restore them. Existing SQLite/MySQL installs gain the nullable column
     // without replacing or rebuilding their current lead data.
     if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
-        $leadColumns = array_column($pdo->query('PRAGMA table_info(leads)')->fetchAll(PDO::FETCH_ASSOC), 'name');
-        if (!in_array('deleted_at', $leadColumns, true)) {
-            $pdo->exec('ALTER TABLE leads ADD COLUMN deleted_at TEXT');
+        $clientColumns = array_column($pdo->query('PRAGMA table_info(clients)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('deleted_at', $clientColumns, true)) {
+            $pdo->exec('ALTER TABLE clients ADD COLUMN deleted_at TEXT');
         }
     } else {
-        $column = $pdo->query("SHOW COLUMNS FROM leads LIKE 'deleted_at'")->fetch();
+        $column = $pdo->query("SHOW COLUMNS FROM clients LIKE 'deleted_at'")->fetch();
         if (!$column) {
-            $pdo->exec('ALTER TABLE leads ADD COLUMN deleted_at TEXT NULL');
+            $pdo->exec('ALTER TABLE clients ADD COLUMN deleted_at TEXT NULL');
         }
     }
     if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
-        $leadColumns = array_column($pdo->query('PRAGMA table_info(leads)')->fetchAll(PDO::FETCH_ASSOC), 'name');
-        if (!in_array('assigned_team_leader_id', $leadColumns, true)) {
-            $pdo->exec('ALTER TABLE leads ADD COLUMN assigned_team_leader_id TEXT');
+        $clientColumns = array_column($pdo->query('PRAGMA table_info(clients)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('assigned_team_leader_id', $clientColumns, true)) {
+            $pdo->exec('ALTER TABLE clients ADD COLUMN assigned_team_leader_id TEXT');
         }
     } else {
-        $column = $pdo->query("SHOW COLUMNS FROM leads LIKE 'assigned_team_leader_id'")->fetch();
+        $column = $pdo->query("SHOW COLUMNS FROM clients LIKE 'assigned_team_leader_id'")->fetch();
         if (!$column) {
-            $pdo->exec('ALTER TABLE leads ADD COLUMN assigned_team_leader_id TEXT NULL');
+            $pdo->exec('ALTER TABLE clients ADD COLUMN assigned_team_leader_id TEXT NULL');
         }
     }
+    ensureDatabaseColumn($pdo, 'clients', 'address', 'TEXT NULL');
 
-    // 2. Clients / Users Table
+    // Portal access belongs to a Client; it is not a second identity.
     $pdo->exec("
-        CREATE TABLE IF NOT EXISTS portal_clients (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            company TEXT,
-            email TEXT UNIQUE,
-            password TEXT,
-            phone TEXT,
-            address TEXT,
-            country TEXT DEFAULT 'United Kingdom',
-            country_code TEXT DEFAULT 'GB',
+        CREATE TABLE IF NOT EXISTS client_portal_access (
+            client_id VARCHAR(191) PRIMARY KEY,
+            password_hash VARCHAR(255),
             status TEXT DEFAULT 'Active',
             portal_enabled INTEGER DEFAULT 1,
             tier TEXT DEFAULT 'Enterprise Partner',
             last_login_at TEXT,
             created_at TEXT
         );
+    ");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS client_identity_reviews (
+            client_id_a VARCHAR(191) NOT NULL,
+            client_id_b VARCHAR(191) NOT NULL,
+            reason TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+            created_at VARCHAR(40) NOT NULL,
+            PRIMARY KEY (client_id_a, client_id_b)
+        )
     ");
 
     // 3. Notifications Table
@@ -787,6 +1021,7 @@ function initSchema(PDO $pdo): void {
     ensureDatabaseColumn($pdo, 'admin_sessions', 'last_seen_at', 'TEXT NULL');
     ensureDatabaseColumn($pdo, 'portal_sessions', 'is_impersonating', 'INTEGER NOT NULL DEFAULT 0');
     ensureDatabaseColumn($pdo, 'portal_sessions', 'admin_user_id', 'TEXT NULL');
+    migrateLegacyClientIdentity($pdo);
 }
 
 function seedInitialData(PDO $pdo): void {

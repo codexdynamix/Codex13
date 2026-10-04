@@ -713,14 +713,12 @@ function createRecurringInvoice(PDO $pdo, string $clientId, string $serviceId, b
 function loadClientIdentifierSets(PDO $pdo): array {
     $emails = [];
     $phones = [];
-    foreach (['leads', 'portal_clients'] as $table) {
-        $stmt = $pdo->query("SELECT email, phone FROM {$table}");
-        while ($row = $stmt->fetch()) {
-            $email = strtolower(trim((string)($row['email'] ?? '')));
-            if ($email !== '') $emails[$email] = true;
-            $phone = normalizeClientPhone((string)($row['phone'] ?? ''));
-            if ($phone !== '') $phones[$phone] = true;
-        }
+    $stmt = $pdo->query('SELECT email, phone FROM clients');
+    while ($row = $stmt->fetch()) {
+        $email = strtolower(trim((string)($row['email'] ?? '')));
+        if ($email !== '') $emails[$email] = true;
+        $phone = normalizeClientPhone((string)($row['phone'] ?? ''));
+        if ($phone !== '') $phones[$phone] = true;
     }
     return [$emails, $phones];
 }
@@ -729,76 +727,57 @@ function findClientIdentifierConflict(
     PDO $pdo,
     string $email,
     string $phone,
-    ?string $excludeLeadId = null,
-    ?string $excludePortalClientId = null,
+    ?string $excludeClientId = null,
+    ?string $unusedPortalClientId = null,
     bool $checkEmail = true,
     bool $checkPhone = true
 ): ?string {
     $email = strtolower(trim($email));
     if ($checkEmail && $email !== '') {
-        foreach (['leads', 'portal_clients'] as $table) {
-            $sql = "SELECT id FROM {$table} WHERE LOWER(TRIM(COALESCE(email, ''))) = ?";
-            $params = [$email];
-            $excludedId = $table === 'leads' ? $excludeLeadId : $excludePortalClientId;
-            if ($excludedId !== null) {
-                $sql .= ' AND id <> ?';
-                $params[] = $excludedId;
-            }
-            $stmt = $pdo->prepare($sql . ' LIMIT 1');
-            $stmt->execute($params);
-            if ($stmt->fetch()) return 'email';
+        $sql = "SELECT id FROM clients WHERE LOWER(TRIM(COALESCE(email, ''))) = ?";
+        $params = [$email];
+        if ($excludeClientId !== null) {
+            $sql .= ' AND id <> ?';
+            $params[] = $excludeClientId;
         }
+        $stmt = $pdo->prepare($sql . ' LIMIT 1');
+        $stmt->execute($params);
+        if ($stmt->fetch()) return 'email';
     }
 
     $normalizedPhone = normalizeClientPhone($phone);
     if ($checkPhone && $normalizedPhone !== '') {
-        foreach (['leads', 'portal_clients'] as $table) {
-            $stmt = $pdo->query("SELECT id, phone FROM {$table} WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
-            $excludedId = $table === 'leads' ? $excludeLeadId : $excludePortalClientId;
-            while ($row = $stmt->fetch()) {
-                if ($excludedId !== null && (string)$row['id'] === $excludedId) continue;
-                if (normalizeClientPhone((string)$row['phone']) === $normalizedPhone) return 'phone';
-            }
+        $stmt = $pdo->query("SELECT id, phone FROM clients WHERE phone IS NOT NULL AND TRIM(phone) <> ''");
+        while ($row = $stmt->fetch()) {
+            if ($excludeClientId !== null && (string)$row['id'] === $excludeClientId) continue;
+            if (normalizeClientPhone((string)$row['phone']) === $normalizedPhone) return 'phone';
         }
     }
     return null;
 }
 
 function ensurePortalClientForLead(PDO $pdo, array $lead, string $plainPassword, string $now): array {
-    $email = strtolower(trim((string)($lead['email'] ?? '')));
     $passwordHash = password_hash($plainPassword, PASSWORD_DEFAULT);
     if ($passwordHash === false) throw new RuntimeException('Could not securely save the client password.');
-
-    $byEmail = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(TRIM(email)) = ? LIMIT 1');
-    $byEmail->execute([$email]);
-    $existing = $byEmail->fetch();
-    if ($existing) {
-        $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $existing['id']]);
-        return ['id' => (string)$existing['id'], 'created' => false];
-    }
-
     $clientId = trim((string)($lead['id'] ?? ''));
-    $byId = $pdo->prepare('SELECT id FROM portal_clients WHERE id = ? LIMIT 1');
-    $byId->execute([$clientId]);
-    if ($clientId === '' || $byId->fetch()) $clientId = 'cl_' . bin2hex(random_bytes(8));
+    if ($clientId === '') throw new InvalidArgumentException('A Client ID is required before enabling portal access.');
+    $clientCheck = $pdo->prepare('SELECT id FROM clients WHERE id = ?');
+    $clientCheck->execute([$clientId]);
+    if (!$clientCheck->fetchColumn()) throw new RuntimeException('The Client record must exist before portal access is created.');
 
-    $name = trim((string)($lead['name'] ?? '')) ?: 'Client';
-    $pdo->prepare("
-        INSERT INTO portal_clients (id, name, company, email, password, phone, country, country_code, status, portal_enabled, tier, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', 1, 'Enterprise Partner', ?)
-    ")->execute([
-        $clientId,
-        $name,
-        trim((string)($lead['company'] ?? '')),
-        $email,
-        $passwordHash,
-        trim((string)($lead['phone'] ?? '')),
-        trim((string)($lead['country'] ?? 'United Kingdom')) ?: 'United Kingdom',
-        trim((string)($lead['country_code'] ?? 'GB')) ?: 'GB',
-        $now,
-    ]);
-
-    return ['id' => $clientId, 'created' => true];
+    $accessCheck = $pdo->prepare('SELECT client_id FROM client_portal_access WHERE client_id = ?');
+    $accessCheck->execute([$clientId]);
+    $created = !$accessCheck->fetchColumn();
+    if ($created) {
+        $pdo->prepare("INSERT INTO client_portal_access
+            (client_id, password_hash, status, portal_enabled, tier, created_at)
+            VALUES (?, ?, 'Active', 1, 'Enterprise Partner', ?)")
+            ->execute([$clientId, $passwordHash, $now]);
+    } else {
+        $pdo->prepare('UPDATE client_portal_access SET password_hash = ? WHERE client_id = ?')
+            ->execute([$passwordHash, $clientId]);
+    }
+    return ['id' => $clientId, 'created' => $created];
 }
 
 $adminSession = null;
@@ -824,7 +803,7 @@ if (($apiPath === '/portal/data'
     $portalSession = findSession($pdo, 'portal_sessions', 'client_id');
     if (!$portalSession) jsonResponse(['ok' => false, 'error' => 'Client sign-in required.'], 401);
     if ($apiPath !== '/portal/logout') {
-        $portalAccountStmt = $pdo->prepare('SELECT status, portal_enabled FROM portal_clients WHERE id = ?');
+        $portalAccountStmt = $pdo->prepare('SELECT status, portal_enabled FROM client_portal_access WHERE client_id = ?');
         $portalAccountStmt->execute([$portalSession['id']]);
         $portalAccount = $portalAccountStmt->fetch();
         if (!$portalAccount || $portalAccount['status'] !== 'Active' || empty($portalAccount['portal_enabled'])) {
@@ -959,7 +938,7 @@ if ($apiPath === '/portal/signup-request' && $method === 'POST') {
     if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         jsonResponse(['ok' => false, 'error' => 'Enter your name and a valid email address.'], 422);
     }
-    $existing = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ?');
+    $existing = $pdo->prepare("SELECT c.id FROM clients c JOIN client_portal_access a ON a.client_id = c.id WHERE LOWER(TRIM(c.email)) = ?");
     $existing->execute([$email]);
     $pending = $pdo->prepare("SELECT id FROM signup_requests WHERE LOWER(email) = ? AND status = 'pending'");
     $pending->execute([$email]);
@@ -1004,7 +983,7 @@ if ($apiPath === '/portal/signup/complete' && $method === 'POST') {
     if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the password.'], 500);
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('UPDATE portal_clients SET password = ?, portal_enabled = 1 WHERE id = ?')
+        $pdo->prepare('UPDATE client_portal_access SET password_hash = ?, portal_enabled = 1 WHERE client_id = ?')
             ->execute([$passwordHash, $signup['client_id']]);
         $pdo->prepare('UPDATE signup_requests SET verification_code_hash = NULL, verification_expires_at = NULL WHERE id = ?')
             ->execute([$signup['id']]);
@@ -1019,9 +998,10 @@ if ($apiPath === '/portal/signup/complete' && $method === 'POST') {
 if ($apiPath === '/portal/password-reset-request' && $method === 'POST') {
     $email = strtolower(trim((string)($input['email'] ?? '')));
     if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $client = $pdo->prepare("SELECT id FROM portal_clients WHERE LOWER(email) = ? AND status = 'Active' AND portal_enabled = 1");
+        $client = $pdo->prepare("SELECT c.id FROM clients c JOIN client_portal_access a ON a.client_id = c.id WHERE LOWER(TRIM(c.email)) = ? AND a.status = 'Active' AND a.portal_enabled = 1");
         $client->execute([$email]);
-        $userId = $client->fetchColumn();
+        $matchingAccounts = $client->fetchAll(PDO::FETCH_COLUMN);
+        $userId = count($matchingAccounts) === 1 ? $matchingAccounts[0] : null;
         if ($userId) {
             $now = date('c');
             $exists = $pdo->prepare('SELECT user_id FROM password_reset_requests WHERE user_id = ?');
@@ -1045,9 +1025,13 @@ if ($apiPath === '/portal/password-reset/complete' && $method === 'POST') {
     if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 8 || strlen($password) > 4096) {
         jsonResponse(['ok' => false, 'error' => 'Enter a valid email address and a password of at least 8 characters.'], 422);
     }
-    $stmt = $pdo->prepare("SELECT c.id, r.code_hash, r.expires_at, r.attempt_count FROM portal_clients c JOIN password_reset_requests r ON r.user_id = c.id WHERE LOWER(c.email) = ? AND r.status = 'sent'");
+    $stmt = $pdo->prepare("SELECT c.id, r.code_hash, r.expires_at, r.attempt_count FROM clients c
+        JOIN client_portal_access a ON a.client_id = c.id
+        JOIN password_reset_requests r ON r.user_id = c.id
+        WHERE LOWER(TRIM(c.email)) = ? AND r.status = 'sent' AND a.status = 'Active' AND a.portal_enabled = 1");
     $stmt->execute([$email]);
-    $reset = $stmt->fetch();
+    $resetRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $reset = count($resetRows) === 1 ? $resetRows[0] : null;
     if (!$reset || empty($reset['code_hash']) || strtotime((string)$reset['expires_at']) <= time()) {
         jsonResponse(['ok' => false, 'error' => 'The reset code is invalid or expired.'], 400);
     }
@@ -1062,7 +1046,7 @@ if ($apiPath === '/portal/password-reset/complete' && $method === 'POST') {
     if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the password.'], 500);
     $pdo->beginTransaction();
     try {
-        $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $reset['id']]);
+        $pdo->prepare('UPDATE client_portal_access SET password_hash = ? WHERE client_id = ?')->execute([$passwordHash, $reset['id']]);
         $pdo->prepare('DELETE FROM password_reset_requests WHERE user_id = ?')->execute([$reset['id']]);
         $pdo->commit();
     } catch (Throwable $error) {
@@ -1235,18 +1219,22 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                 'timeline' => trim((string)($row['timeline'] ?? '')),
                 'message' => trim((string)($row['message'] ?? '')),
                 'notes' => trim((string)($row['notes'] ?? '')),
-                'client_password' => trim((string)($row['client_password'] ?? $row['password'] ?? '')),
+                'initial_portal_password' => trim((string)($row['client_password'] ?? $row['password'] ?? '')),
                 'assigned_office_id' => $assignment['office_id'],
                 'assigned_team_id' => $assignment['team_id'],
                 'assigned_team_leader_id' => $assignment['team_leader_id'],
                 'assigned_agent_id' => $assignment['agent_id'],
             ];
+            if ($preparedRows[count($preparedRows) - 1]['initial_portal_password'] !== ''
+                && strlen($preparedRows[count($preparedRows) - 1]['initial_portal_password']) < 8) {
+                jsonResponse(['ok' => false, 'error' => 'Row ' . ($index + 1) . ' has a portal password shorter than 8 characters.'], 422);
+            }
         }
 
         $now = date('c');
         $insertLead = $pdo->prepare("
-            INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, client_password, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, stage, status, funnel, company, service, budget, timeline, message, source, notes, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?, ?, ?, ?, ?, ?)
         ");
         $importedLeads = [];
         $pdo->beginTransaction();
@@ -1272,10 +1260,13 @@ if ($isAdminLeadCollection || $isAdminLeadImport || $isAdminLeadSearch || $isAdm
                     $lead['id'], $lead['first_name'], $lead['last_name'], $lead['name'], $lead['email'],
                     $lead['phone'], $lead['country'], $lead['country_code'], $lead['stage'], $lead['stage'],
                     $lead['funnel'], $lead['company'], $lead['service'], $lead['budget'], $lead['timeline'],
-                    $lead['message'], $lead['notes'], $lead['client_password'], $lead['assigned_office_id'],
+                    $lead['message'], $lead['notes'], $lead['assigned_office_id'],
                     $lead['assigned_team_id'], $lead['assigned_team_leader_id'], $lead['assigned_agent_id'], $now, $now,
                 ]);
-                if ($lead['client_password'] !== '') ensurePortalClientForLead($pdo, $lead, $lead['client_password'], $now);
+                if ($lead['initial_portal_password'] !== '') {
+                    ensurePortalClientForLead($pdo, $lead, $lead['initial_portal_password'], $now);
+                }
+                unset($lead['initial_portal_password']);
                 $importedLeads[] = normalizeLeadRow($lead + [
                     'status' => $lead['stage'],
                     'source' => 'csv_import',
@@ -1825,16 +1816,19 @@ if ($apiPath === '/admin/users') {
     if ($search !== '') {
         $term = "%{$search}%";
         $stmt = $pdo->prepare("
-            SELECT id, name, company, email, phone, status, portal_enabled, tier, last_login_at, created_at
-            FROM portal_clients
-            WHERE name LIKE ? OR email LIKE ? OR company LIKE ? OR id LIKE ?
-            ORDER BY name ASC
-            LIMIT ?
+            SELECT c.id, c.name, c.company, c.email, c.phone, c.status,
+                   COALESCE(a.portal_enabled, 0) AS portal_enabled, a.tier, a.last_login_at, c.created_at
+            FROM clients c LEFT JOIN client_portal_access a ON a.client_id = c.id
+            WHERE c.name LIKE ? OR c.email LIKE ? OR c.company LIKE ? OR c.id LIKE ?
+            ORDER BY c.name ASC LIMIT ?
         ");
         $stmt->execute([$term, $term, $term, $term, $limit]);
         $clients = $stmt->fetchAll();
     } else {
-        $stmt = $pdo->prepare("SELECT id, name, company, email, phone, status, portal_enabled, tier, last_login_at, created_at FROM portal_clients ORDER BY name ASC LIMIT ?");
+        $stmt = $pdo->prepare("SELECT c.id, c.name, c.company, c.email, c.phone, c.status,
+                   COALESCE(a.portal_enabled, 0) AS portal_enabled, a.tier, a.last_login_at, c.created_at
+            FROM clients c LEFT JOIN client_portal_access a ON a.client_id = c.id
+            ORDER BY c.name ASC LIMIT ?");
         $stmt->execute([$limit]);
         $clients = $stmt->fetchAll();
     }
@@ -1850,16 +1844,18 @@ if (
         || preg_match('#^/admin/leads/([^/]+)/set-password$#', $apiPath, $leadPasswordMatch))
     && $method === 'POST'
 ) {
+    $passwordActor = requireActiveAdminStaff($pdo, $adminSession);
     $isLeadPassword = isset($leadPasswordMatch[1]);
     $userId = rawurldecode($isLeadPassword ? $leadPasswordMatch[1] : $userPasswordMatch[1]);
     $newPassword = trim((string)($input['password'] ?? $input['new_password'] ?? $input['client_password'] ?? ''));
-    if ($newPassword === '') {
-        jsonResponse(['ok' => false, 'error' => 'Password cannot be empty.'], 400);
+    if (strlen($newPassword) < 8 || strlen($newPassword) > 4096) {
+        jsonResponse(['ok' => false, 'error' => 'Password must contain at least 8 characters.'], 422);
     }
 
     $now = date('c');
+    requireVisibleLead($pdo, $passwordActor, $userId);
     if ($isLeadPassword) {
-        $leadStmt = $pdo->prepare('SELECT id, name, company, email, phone, country, country_code, created_at FROM leads WHERE id = ?');
+        $leadStmt = $pdo->prepare('SELECT id, name, company, email, phone, country, country_code, created_at FROM clients WHERE id = ?');
         $leadStmt->execute([$userId]);
         $lead = $leadStmt->fetch();
         if (!$lead) jsonResponse(['ok' => false, 'error' => 'Lead not found.'], 404);
@@ -1871,52 +1867,19 @@ if (
 
         $pdo->beginTransaction();
         try {
-            $portalLookup = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(TRIM(email)) = ? LIMIT 1');
-            $portalLookup->execute([$leadEmail]);
-            $existingPortalAccount = $portalLookup->fetch();
-            if ($existingPortalAccount && (string)$existingPortalAccount['id'] !== $userId) {
+            $emailCount = $pdo->prepare("SELECT COUNT(*) FROM clients WHERE LOWER(TRIM(email)) = ?");
+            $emailCount->execute([$leadEmail]);
+            if ((int)$emailCount->fetchColumn() > 1) {
                 $pdo->rollBack();
                 jsonResponse([
                     'ok' => false,
-                    'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
+                    'code' => 'CLIENT_IDENTITY_REVIEW_REQUIRED',
                     'field' => 'email',
-                    'error' => 'Another client account already uses this email address.',
+                    'error' => 'This email is linked to multiple Client records. Resolve the identity review before enabling portal access.',
                 ], 409);
             }
-            if (!$existingPortalAccount) {
-                $conflict = findClientIdentifierConflict($pdo, $leadEmail, (string)($lead['phone'] ?? ''), $userId);
-                if ($conflict !== null) {
-                    $pdo->rollBack();
-                    $identifier = $conflict === 'email' ? 'email address' : 'phone number';
-                    jsonResponse([
-                        'ok' => false,
-                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
-                        'field' => $conflict,
-                        'error' => 'Cannot create portal access because another lead or client account already uses this ' . $identifier . '.',
-                    ], 409);
-                }
-            } else {
-                $phoneConflict = findClientIdentifierConflict(
-                    $pdo,
-                    $leadEmail,
-                    (string)($lead['phone'] ?? ''),
-                    $userId,
-                    (string)$existingPortalAccount['id'],
-                    false,
-                    true
-                );
-                if ($phoneConflict !== null) {
-                    $pdo->rollBack();
-                    jsonResponse([
-                        'ok' => false,
-                        'code' => 'DUPLICATE_CLIENT_IDENTIFIER',
-                        'field' => 'phone',
-                        'error' => 'Another lead or client account already uses this phone number.',
-                    ], 409);
-                }
-            }
             $portalClient = ensurePortalClientForLead($pdo, $lead, $newPassword, $now);
-            $pdo->prepare('UPDATE leads SET client_password = ?, updated_at = ? WHERE id = ?')->execute([$newPassword, $now, $userId]);
+            $pdo->prepare('UPDATE clients SET updated_at = ? WHERE id = ?')->execute([$now, $userId]);
             $pdo->commit();
         } catch (Throwable $error) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -1925,23 +1888,27 @@ if (
         $clientId = $portalClient['id'];
         $accountCreated = $portalClient['created'];
     } else {
-        $clientStmt = $pdo->prepare('SELECT id, email FROM portal_clients WHERE id = ? LIMIT 1');
+        $clientStmt = $pdo->prepare('SELECT id, email FROM clients WHERE id = ? LIMIT 1');
         $clientStmt->execute([$userId]);
         $client = $clientStmt->fetch();
         if (!$client) {
-            $clientStmt = $pdo->prepare('SELECT id, email FROM portal_clients WHERE LOWER(email) = ? LIMIT 1');
-            $clientStmt->execute([strtolower($userId)]);
-            $client = $clientStmt->fetch();
+            jsonResponse(['ok' => false, 'error' => 'Client not found. Use the Client ID.'], 404);
         }
-        if (!$client) jsonResponse(['ok' => false, 'error' => 'Client portal account not found.'], 404);
 
         $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
         if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the client password.'], 500);
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('UPDATE portal_clients SET password = ? WHERE id = ?')->execute([$passwordHash, $client['id']]);
-            $pdo->prepare('UPDATE leads SET client_password = ?, updated_at = ? WHERE id = ? OR LOWER(email) = ?')
-                ->execute([$newPassword, $now, $userId, strtolower((string)$client['email'])]);
+            $accessExists = $pdo->prepare('SELECT client_id FROM client_portal_access WHERE client_id = ?');
+            $accessExists->execute([$client['id']]);
+            if ($accessExists->fetchColumn()) {
+                $pdo->prepare('UPDATE client_portal_access SET password_hash = ? WHERE client_id = ?')->execute([$passwordHash, $client['id']]);
+            } else {
+                $pdo->prepare("INSERT INTO client_portal_access (client_id, password_hash, status, portal_enabled, created_at)
+                    VALUES (?, ?, 'Active', 1, ?)")
+                    ->execute([$client['id'], $passwordHash, $now]);
+            }
+            $pdo->prepare('UPDATE clients SET updated_at = ? WHERE id = ?')->execute([$now, $client['id']]);
             $pdo->commit();
         } catch (Throwable $error) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -3640,9 +3607,35 @@ if (preg_match('#^/admin/signup-requests/([^/]+)(?:/(approve|reject))?$#', $apiP
         $data = json_decode((string)$request['request_data'], true);
         if (!is_array($data)) jsonResponse(['ok' => false, 'error' => 'Signup request data is invalid.'], 422);
         $email = strtolower(trim((string)$request['email']));
-        $existingClient = $pdo->prepare('SELECT id FROM portal_clients WHERE LOWER(email) = ?');
-        $existingClient->execute([$email]);
-        if ($existingClient->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'A client account already uses this email address.'], 409);
+        $candidateStmt = $pdo->prepare("SELECT id, name, company, email FROM clients WHERE LOWER(TRIM(email)) = ? AND deleted_at IS NULL ORDER BY created_at, id");
+        $candidateStmt->execute([$email]);
+        $candidates = $candidateStmt->fetchAll(PDO::FETCH_ASSOC);
+        $requestedClientId = trim((string)($input['client_id'] ?? ''));
+        if ($candidates && $requestedClientId === '') {
+            jsonResponse([
+                'ok' => false,
+                'code' => 'CLIENT_IDENTITY_SELECTION_REQUIRED',
+                'error' => 'Choose the Client record this portal signup belongs to. Email alone is not enough to link identities.',
+                'candidateClients' => $candidates,
+            ], 409);
+        }
+        $matchedClient = null;
+        if ($requestedClientId !== '') {
+            foreach ($candidates as $candidate) {
+                if ((string)$candidate['id'] === $requestedClientId) {
+                    $matchedClient = $candidate;
+                    break;
+                }
+            }
+            if (!$matchedClient) {
+                jsonResponse(['ok' => false, 'error' => 'The selected Client record does not match this signup email.'], 422);
+            }
+            $accessExists = $pdo->prepare('SELECT client_id FROM client_portal_access WHERE client_id = ?');
+            $accessExists->execute([$requestedClientId]);
+            if ($accessExists->fetchColumn()) {
+                jsonResponse(['ok' => false, 'error' => 'This Client already has a portal access record.'], 409);
+            }
+        }
         $assignment = validateLeadAssignment($pdo, [
             'office_id' => $input['assigned_office_id'] ?? $input['office_id'] ?? null,
             'team_id' => $input['assigned_team_id'] ?? $input['team_id'] ?? null,
@@ -3650,29 +3643,27 @@ if (preg_match('#^/admin/signup-requests/([^/]+)(?:/(approve|reject))?$#', $apiP
             'agent_id' => $input['agent_id'] ?? $input['assigned_agent_id'] ?? null,
         ]);
         assertCanAssignLead($actor, $assignment, $pdo);
-        $clientId = 'client_' . bin2hex(random_bytes(10));
-        $leadId = 'ld_signup_' . bin2hex(random_bytes(10));
         $now = date('c');
         $name = trim((string)($data['name'] ?? $request['name']));
         $parts = preg_split('/\s+/', $name, 2) ?: [$name, ''];
         $firstName = (string)($parts[0] ?? '');
         $lastName = (string)($parts[1] ?? '');
-        $existingLeadStmt = $pdo->prepare('SELECT * FROM leads WHERE LOWER(email) = ? AND deleted_at IS NULL ORDER BY created_at ASC');
-        $existingLeadStmt->execute([$email]);
-        $existingLead = $existingLeadStmt->fetch();
+        $clientId = $matchedClient ? $requestedClientId : 'client_' . bin2hex(random_bytes(10));
+        $client = null;
         $pdo->beginTransaction();
         try {
-            if ($existingLead) {
-                $leadId = (string)$existingLead['id'];
+            if ($matchedClient) {
+                $clientQuery = $pdo->prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL');
+                $clientQuery->execute([$clientId]);
+                $client = $clientQuery->fetch() ?: [];
                 if (array_filter($assignment, static fn($value) => $value !== null)) {
-                    $lead = saveLeadAssignment($pdo, $leadId, $assignment, $actor);
-                } else {
-                    $lead = $existingLead;
+                    $client = saveLeadAssignment($pdo, $clientId, $assignment, $actor);
                 }
             } else {
-                $pdo->prepare("INSERT INTO leads (id, first_name, last_name, name, email, phone, country, country_code, company, message, source, stage, status, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, assigned_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'signup_request', 'New', 'New', ?, ?, ?, ?, ?, ?, ?)")
+                $pdo->prepare("INSERT INTO clients (id, first_name, last_name, name, email, phone, country, country_code, company, message, source, stage, status, assigned_office_id, assigned_team_id, assigned_team_leader_id, assigned_agent_id, assigned_by, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'signup_request', 'New', 'New', ?, ?, ?, ?, ?, ?, ?)")
                     ->execute([
-                        $leadId, $firstName, $lastName, $name, $email,
+                        $clientId, $firstName, $lastName, $name, $email,
                         trim((string)($data['phone'] ?? '')),
                         trim((string)($data['country'] ?? '')),
                         trim((string)($data['country_code'] ?? '')),
@@ -3681,24 +3672,21 @@ if (preg_match('#^/admin/signup-requests/([^/]+)(?:/(approve|reject))?$#', $apiP
                         $assignment['office_id'], $assignment['team_id'], $assignment['team_leader_id'], $assignment['agent_id'],
                         $actor['id'], $now, $now,
                     ]);
-                $leadQuery = $pdo->prepare('SELECT * FROM leads WHERE id = ?');
-                $leadQuery->execute([$leadId]);
-                $lead = $leadQuery->fetch() ?: [];
+                $clientQuery = $pdo->prepare('SELECT * FROM clients WHERE id = ?');
+                $clientQuery->execute([$clientId]);
+                $client = $clientQuery->fetch() ?: [];
             }
-            $pdo->prepare("INSERT INTO portal_clients (id, name, company, email, password, phone, country, country_code, status, portal_enabled, created_at) VALUES (?, ?, ?, ?, '', ?, ?, ?, 'Active', 0, ?)")
-                ->execute([
-                    $clientId, $name, trim((string)($data['company'] ?? '')), $email,
-                    trim((string)($data['phone'] ?? '')), trim((string)($data['country'] ?? '')),
-                    trim((string)($data['country_code'] ?? '')), $now,
-                ]);
+            $pdo->prepare("INSERT INTO client_portal_access (client_id, password_hash, status, portal_enabled, created_at)
+                VALUES (?, '', 'Active', 0, ?)")
+                ->execute([$clientId, $now]);
             $pdo->prepare("UPDATE signup_requests SET status = 'approved', verification_code_hash = ?, verification_expires_at = ?, verification_attempts = 0, client_id = ?, lead_id = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'")
-                ->execute([password_hash($code, PASSWORD_DEFAULT), date('c', time() + 3600), $clientId, $leadId, $now, $requestId]);
+                ->execute([password_hash($code, PASSWORD_DEFAULT), date('c', time() + 3600), $clientId, $clientId, $now, $requestId]);
             $pdo->commit();
         } catch (Throwable $error) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             throw $error;
         }
-        jsonResponse(['ok' => true, 'lead' => normalizeLeadRow($lead)]);
+        jsonResponse(['ok' => true, 'client' => normalizeLeadRow($client), 'client_id' => $clientId]);
     }
     jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 }
@@ -3707,7 +3695,12 @@ if ($apiPath === '/admin/password-reset-requests') {
     $actor = requireActiveAdminStaff($pdo, $adminSession);
     if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage password-reset requests.'], 403);
     if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
-    $rows = $pdo->query("SELECT c.id, c.name AS user_name, c.email AS user_email, r.requested_at FROM password_reset_requests r JOIN portal_clients c ON c.id = r.user_id WHERE r.status = 'pending' AND c.status = 'Active' AND c.portal_enabled = 1 ORDER BY r.requested_at ASC")->fetchAll();
+    $rows = $pdo->query("SELECT c.id, c.name AS user_name, c.email AS user_email, r.requested_at
+        FROM password_reset_requests r
+        JOIN clients c ON c.id = r.user_id
+        JOIN client_portal_access a ON a.client_id = c.id
+        WHERE r.status = 'pending' AND a.status = 'Active' AND a.portal_enabled = 1
+        ORDER BY r.requested_at ASC")->fetchAll();
     foreach ($rows as &$row) $row['id'] = $row['id'];
     unset($row);
     jsonResponse(['ok' => true, 'items' => $rows]);
@@ -3739,7 +3732,7 @@ if (preg_match('#^/admin/client-workspaces/([^/]+)$#', $apiPath, $m)) {
     $actor = requireActiveAdminStaff($pdo, $adminSession);
     if ($actor['role'] !== 'Super Admin') jsonResponse(['ok' => false, 'error' => 'Only a Super Admin can manage client workspaces.'], 403);
     $userId = rawurldecode($m[1]);
-    $clientStmt = $pdo->prepare('SELECT id FROM portal_clients WHERE id = ?');
+    $clientStmt = $pdo->prepare('SELECT id FROM clients WHERE id = ?');
     $clientStmt->execute([$userId]);
     if (!$clientStmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Client account not found.'], 404);
     if ($method === 'GET') {
@@ -3943,64 +3936,54 @@ if ($apiPath === '/admin/accounting/overview') {
     if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
     requireSuperAdmin($pdo, $adminSession);
 
-    $clientMap = [];
-    foreach ($pdo->query("SELECT id, name, company, email, phone, status, portal_enabled FROM portal_clients")->fetchAll() as $client) {
-        $client['name'] = trim((string)($client['name'] ?? '')) ?: (trim((string)($client['company'] ?? '')) ?: 'Client');
-        $client['source'] = 'portal';
-        $clientMap[(string)$client['id']] = $client;
+    $clients = $pdo->query("SELECT c.id, c.first_name, c.last_name, c.name, c.company, c.email, c.phone, c.status,
+            COALESCE(a.portal_enabled, 0) AS portal_enabled,
+            CASE WHEN a.client_id IS NULL THEN 'crm' ELSE 'portal' END AS source
+        FROM clients c LEFT JOIN client_portal_access a ON a.client_id = c.id
+        WHERE c.deleted_at IS NULL")->fetchAll();
+    foreach ($clients as &$client) {
+        $fullName = trim((string)($client['first_name'] ?? '') . ' ' . (string)($client['last_name'] ?? ''));
+        $client['name'] = trim((string)($client['name'] ?? '')) ?: ($fullName ?: (trim((string)($client['company'] ?? '')) ?: 'Client'));
+        $client['company'] = (string)($client['company'] ?? '');
+        $client['email'] = (string)($client['email'] ?? '');
     }
-    foreach ($pdo->query("SELECT id, first_name, last_name, name, company, email, phone, status FROM leads WHERE deleted_at IS NULL")->fetchAll() as $leadClient) {
-        $id = (string)$leadClient['id'];
-        if (isset($clientMap[$id])) continue;
-        $fullName = trim((string)($leadClient['first_name'] ?? '') . ' ' . (string)($leadClient['last_name'] ?? ''));
-        $leadClient['name'] = trim((string)($leadClient['name'] ?? '')) ?: ($fullName ?: (trim((string)($leadClient['company'] ?? '')) ?: 'Client'));
-        $leadClient['company'] = (string)($leadClient['company'] ?? '');
-        $leadClient['email'] = (string)($leadClient['email'] ?? '');
-        $leadClient['portal_enabled'] = 0;
-        $leadClient['source'] = 'crm';
-        $clientMap[$id] = $leadClient;
-    }
-    $clients = array_values($clientMap);
+    unset($client);
     usort($clients, static fn(array $a, array $b): int => strcasecmp((string)$a['name'], (string)$b['name']));
 
     $invoices = $pdo->query("
         SELECT i.*,
-               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
-               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+               COALESCE(NULLIF(c.name, ''), NULLIF(c.company, ''), 'Client') AS client_name,
+               COALESCE(c.email, '') AS client_email
         FROM client_invoices i
-        LEFT JOIN portal_clients pc ON pc.id = i.client_id
-        LEFT JOIN leads l ON l.id = i.client_id
+        LEFT JOIN clients c ON c.id = i.client_id
         ORDER BY i.issue_date DESC, i.created_at DESC
     ")->fetchAll();
     $payments = $pdo->query("
         SELECT p.*,
-               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
-               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+               COALESCE(NULLIF(c.name, ''), NULLIF(c.company, ''), 'Client') AS client_name,
+               COALESCE(c.email, '') AS client_email
         FROM client_payments p
-        LEFT JOIN portal_clients pc ON pc.id = p.client_id
-        LEFT JOIN leads l ON l.id = p.client_id
+        LEFT JOIN clients c ON c.id = p.client_id
         ORDER BY p.payment_date DESC, p.created_at DESC
     ")->fetchAll();
     $recurringServices = $pdo->query("
         SELECT s.*,
-               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
-               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email
+               COALESCE(NULLIF(c.name, ''), NULLIF(c.company, ''), 'Client') AS client_name,
+               COALESCE(c.email, '') AS client_email
         FROM client_recurring_services s
-        LEFT JOIN portal_clients pc ON pc.id = s.client_id
-        LEFT JOIN leads l ON l.id = s.client_id
+        LEFT JOIN clients c ON c.id = s.client_id
         ORDER BY s.next_due_date ASC, s.service_name ASC
     ")->fetchAll();
     $hosting = $pdo->query('SELECT * FROM client_hosting ORDER BY renewal_date ASC')->fetchAll();
     $domains = $pdo->query('SELECT * FROM client_domains ORDER BY expiration_date ASC')->fetchAll();
     $followups = $pdo->query("
         SELECT f.*, i.invoice_number,
-               COALESCE(NULLIF(pc.name, ''), NULLIF(l.name, ''), NULLIF(pc.company, ''), NULLIF(l.company, ''), 'Client') AS client_name,
-               COALESCE(NULLIF(pc.email, ''), l.email, '') AS client_email,
+               COALESCE(NULLIF(c.name, ''), NULLIF(c.company, ''), 'Client') AS client_name,
+               COALESCE(c.email, '') AS client_email,
                su.name AS staff_name
         FROM client_invoice_followups f
         LEFT JOIN client_invoices i ON i.id = f.invoice_id
-        LEFT JOIN portal_clients pc ON pc.id = f.client_id
-        LEFT JOIN leads l ON l.id = f.client_id
+        LEFT JOIN clients c ON c.id = f.client_id
         LEFT JOIN staff_users su ON su.id = f.created_by
         ORDER BY f.contact_date DESC, f.created_at DESC
     ")->fetchAll();
@@ -4201,14 +4184,9 @@ if ($isAccountingServiceInvoice || $isAccountingServiceResource || $isAccounting
     if ($isAccountingServiceCollection) {
         if ($method !== 'POST') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
 
-        $clientStmt = $pdo->prepare("
-            SELECT id FROM portal_clients WHERE id = ?
-            UNION
-            SELECT id FROM leads WHERE id = ? AND deleted_at IS NULL
-            LIMIT 1
-        ");
-        $clientStmt->execute([$clientId, $clientId]);
-        if (!$clientStmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Choose an existing client account or profile.'], 404);
+        $clientStmt = $pdo->prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL');
+        $clientStmt->execute([$clientId]);
+        if (!$clientStmt->fetchColumn()) jsonResponse(['ok' => false, 'error' => 'Choose an existing Client record.'], 404);
 
         $serviceName = trim((string)($input['serviceName'] ?? ''));
         $serviceType = trim((string)($input['serviceType'] ?? 'Other'));
@@ -4486,25 +4464,36 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
     $email = strtolower(trim($input['email'] ?? ''));
     $password = $input['password'] ?? '';
 
-    $stmt = $pdo->prepare("SELECT * FROM portal_clients WHERE LOWER(TRIM(email)) = ?");
+    $stmt = $pdo->prepare("SELECT c.*, a.password_hash, a.status AS portal_status, a.portal_enabled, a.tier, a.last_login_at
+        FROM clients c
+        JOIN client_portal_access a ON a.client_id = c.id
+        WHERE LOWER(TRIM(c.email)) = ?");
     $stmt->execute([$email]);
-    $client = $stmt->fetch();
+    $matches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (count($matches) > 1) {
+        jsonResponse(['ok' => false, 'code' => 'CLIENT_IDENTITY_REVIEW_REQUIRED', 'error' => 'This email is linked to multiple Client records. Contact support to resolve access.'], 409);
+    }
+    $client = $matches[0] ?? null;
 
     if (!$client) {
         jsonResponse(['ok' => false, 'error' => 'No client account found with this email address.'], 404);
     }
-    if (empty($client['portal_enabled'])) {
+    if (empty($client['portal_enabled']) || $client['portal_status'] !== 'Active') {
         jsonResponse(['ok' => false, 'error' => 'This client portal account is currently disabled.'], 403);
     }
-    if ($password === '' || !$client['password'] || !(password_verify($password, $client['password']) || hash_equals((string)$client['password'], (string)$password))) {
+    if ($password === '' || empty($client['password_hash']) || !password_verify($password, (string)$client['password_hash'])) {
         jsonResponse(['ok' => false, 'error' => 'Incorrect password. Please try again.'], 401);
     }
-    if (!password_get_info($client['password'])['algo']) {
-        $pdo->prepare("UPDATE portal_clients SET password = ? WHERE id = ?")->execute([password_hash($password, PASSWORD_DEFAULT), $client['id']]);
+    if (password_needs_rehash((string)$client['password_hash'], PASSWORD_DEFAULT)) {
+        $rehash = password_hash($password, PASSWORD_DEFAULT);
+        if ($rehash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely update the password hash.'], 500);
+        $pdo->prepare('UPDATE client_portal_access SET password_hash = ? WHERE client_id = ?')
+            ->execute([$rehash, $client['id']]);
     }
 
     $now = date('c');
-    $pdo->prepare("UPDATE portal_clients SET last_login_at = ? WHERE id = ?")->execute([$now, $client['id']]);
+    $pdo->prepare('UPDATE client_portal_access SET last_login_at = ? WHERE client_id = ?')->execute([$now, $client['id']]);
+    $client['status'] = $client['portal_status'];
     $token = bin2hex(random_bytes(32));
     $pdo->prepare("INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
         ->execute([hash('sha256', $token), $client['id'], date('c', time() + 86400 * 14), $now]);
@@ -4534,9 +4523,11 @@ if (preg_match('#^/admin/clients/([^/]+)/impersonate$#', $apiPath, $impersonatio
     $actor = requireActiveAdminStaff($pdo, $adminSession);
     $clientId = rawurldecode($impersonationMatch[1]);
     requireVisibleLead($pdo, $actor, $clientId);
-    $clientStmt = $pdo->prepare('SELECT * FROM portal_clients WHERE id = ?');
+    $clientStmt = $pdo->prepare("SELECT c.*, a.portal_enabled, a.status AS portal_status, a.tier, a.last_login_at
+        FROM clients c JOIN client_portal_access a ON a.client_id = c.id WHERE c.id = ?");
     $clientStmt->execute([$clientId]);
     $client = $clientStmt->fetch();
+    if ($client) $client['status'] = $client['portal_status'];
     if (!$client || empty($client['portal_enabled']) || $client['status'] !== 'Active') {
         jsonResponse(['ok' => false, 'error' => 'This client does not have an active portal account.'], 409);
     }
@@ -4723,7 +4714,9 @@ if ($apiPath === '/portal/data') {
     }
     if (empty($portalSession['impersonating']) && $clientId !== $portalSession['id']) jsonResponse(['ok' => false, 'error' => 'Forbidden.'], 403);
 
-    $stmtC = $pdo->prepare("SELECT id, name, company, email, phone, address, country, country_code, status, portal_enabled, tier, last_login_at, created_at FROM portal_clients WHERE id = ?");
+    $stmtC = $pdo->prepare("SELECT c.id, c.name, c.company, c.email, c.phone, c.address, c.country, c.country_code,
+            a.status, a.portal_enabled, a.tier, a.last_login_at, c.created_at
+        FROM clients c JOIN client_portal_access a ON a.client_id = c.id WHERE c.id = ?");
     $stmtC->execute([$clientId]);
     $client = $stmtC->fetch() ?: null;
 
@@ -4784,10 +4777,24 @@ if ($apiPath === '/portal/profile' && $method === 'POST') {
     foreach (['name', 'company', 'phone', 'address', 'country'] as $field) {
         if (array_key_exists($field, $input)) $updates[$field] = trim((string)$input[$field]);
     }
-    if (!empty($input['password'])) $updates['password'] = password_hash((string)$input['password'], PASSWORD_DEFAULT);
-    if (!$updates) jsonResponse(['ok' => false, 'error' => 'No profile changes were provided.'], 400);
-    $set = implode(', ', array_map(static fn($key) => "{$key} = ?", array_keys($updates)));
-    $pdo->prepare("UPDATE portal_clients SET {$set} WHERE id = ?")->execute([...array_values($updates), $clientId]);
+    $newPassword = (string)($input['password'] ?? '');
+    if ($newPassword !== '') {
+        if (strlen($newPassword) < 8 || strlen($newPassword) > 4096) {
+            jsonResponse(['ok' => false, 'error' => 'Password must contain at least 8 characters.'], 422);
+        }
+        $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
+        if ($passwordHash === false) jsonResponse(['ok' => false, 'error' => 'Could not securely save the password.'], 500);
+    }
+    if (!$updates && !isset($passwordHash)) jsonResponse(['ok' => false, 'error' => 'No profile changes were provided.'], 400);
+    if ($updates) {
+        $set = implode(', ', array_map(static fn($key) => "{$key} = ?", array_keys($updates)));
+        $pdo->prepare("UPDATE clients SET {$set}, updated_at = ? WHERE id = ?")
+            ->execute([...array_values($updates), date('c'), $clientId]);
+    }
+    if (isset($passwordHash)) {
+        $pdo->prepare('UPDATE client_portal_access SET password_hash = ? WHERE client_id = ?')
+            ->execute([$passwordHash, $clientId]);
+    }
     jsonResponse(['ok' => true]);
 }
 

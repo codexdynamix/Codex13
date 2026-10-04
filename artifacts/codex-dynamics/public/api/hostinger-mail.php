@@ -214,7 +214,7 @@ function hostingerMailNormalizeProviderMailboxes(array $account, PDO $pdo): arra
     $assignmentStmt = $pdo->prepare(
         'SELECT m.provider_mailbox_id, m.client_id, m.email_address, c.name AS client_name, c.company AS client_company
          FROM client_mailboxes m
-         LEFT JOIN portal_clients c ON c.id = m.client_id
+         LEFT JOIN clients c ON c.id = m.client_id
          WHERE m.provider = ?'
     );
     $assignmentStmt->execute(['hostinger']);
@@ -628,7 +628,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
             if (!preg_match('/^[A-Za-z0-9_-]{1,191}$/', $clientId)) {
                 jsonResponse(['ok' => false, 'error' => 'Client account was not found.'], 404);
             }
-            $clientStmt = $pdo->prepare('SELECT id, name, company FROM portal_clients WHERE id = ? LIMIT 1');
+            $clientStmt = $pdo->prepare('SELECT id, name, company FROM clients WHERE id = ? LIMIT 1');
             $clientStmt->execute([$clientId]);
             $client = $clientStmt->fetch();
             if (!$client) jsonResponse(['ok' => false, 'error' => 'Email account assignments require a client portal account.'], 404);
@@ -788,7 +788,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
                 || strlen($displayName) > 191) {
                 jsonResponse(['ok' => false, 'error' => 'The mailbox transfer details are invalid.'], 422);
             }
-            $targetStmt = $pdo->prepare('SELECT id, name, company FROM portal_clients WHERE id = ? LIMIT 1');
+            $targetStmt = $pdo->prepare('SELECT id, name, company FROM clients WHERE id = ? LIMIT 1');
             $targetStmt->execute([$targetClientId]);
             $targetClient = $targetStmt->fetch();
             if (!$targetClient) jsonResponse(['ok' => false, 'error' => 'The destination client account was not found.'], 404);
@@ -804,7 +804,7 @@ function hostingerMailHandleRequest(PDO $pdo, string $apiPath, string $method, a
                 $pdo->rollBack();
                 jsonResponse(['ok' => false, 'error' => 'This mailbox is already assigned to the selected client.'], 409);
             }
-            $sourceStmt = $pdo->prepare('SELECT name, company FROM portal_clients WHERE id = ? LIMIT 1');
+            $sourceStmt = $pdo->prepare('SELECT name, company FROM clients WHERE id = ? LIMIT 1');
             $sourceStmt->execute([$assignment['client_id']]);
             $sourceClient = $sourceStmt->fetch() ?: [];
             $now = hostingerMailNow();

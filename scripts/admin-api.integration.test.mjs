@@ -91,13 +91,17 @@ function seedDatabase(sqlitePath) {
       'office_two', 'team_two', null, null, '[]', $now, $now]);
 
     $client = $pdo->prepare('
-      INSERT INTO portal_clients (id, name, company, email, password, status, portal_enabled, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO clients (id, name, company, email, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     ');
-    $client->execute(['client_alpha', 'Alpha Contact', 'Alpha Company', 'alpha@example.test',
-      password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
-    $client->execute(['client_beta', 'Beta Contact', 'Beta Company', 'beta@example.test',
-      password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
+    $client->execute(['client_alpha', 'Alpha Contact', 'Alpha Company', 'alpha@example.test', 'Active', $now, $now]);
+    $client->execute(['client_beta', 'Beta Contact', 'Beta Company', 'beta@example.test', 'Active', $now, $now]);
+    $portalAccess = $pdo->prepare('
+      INSERT INTO client_portal_access (client_id, password_hash, status, portal_enabled, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    ');
+    $portalAccess->execute(['client_alpha', password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
+    $portalAccess->execute(['client_beta', password_hash('not-used', PASSWORD_DEFAULT), 'Active', 1, $now]);
 
     $portalSession = $pdo->prepare('
       INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at)

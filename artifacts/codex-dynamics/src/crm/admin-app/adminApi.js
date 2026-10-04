@@ -556,6 +556,7 @@ async function adminFetch(path, { method = 'GET', body } = {}) {
     const error = new Error(data?.error || `Request failed (${res.status})`);
     error.status = res.status;
     error.code = data?.code;
+    error.candidateClients = Array.isArray(data?.candidateClients) ? data.candidateClients : [];
     throw error;
   }
   return data;
@@ -1618,7 +1619,8 @@ export async function approveSignupRequest(requestId, body) {
     `/api/admin/signup-requests/${encodeURIComponent(requestId)}/approve`,
     { method: 'POST', body }
   );
-  return { lead: mapLeadRow(data?.lead), ok: true };
+  const client = data?.client ?? data?.lead;
+  return { client: mapLeadRow(client), lead: mapLeadRow(client), ok: true };
 }
 
 export async function rejectSignupRequest(requestId, { reason = '', code = '' } = {}) {
