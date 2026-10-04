@@ -535,23 +535,50 @@ function handleLocalMock(path, method, body) {
   return { ok: true };
 }
 
+const CLIENT_WIRE_FIELDS = {
+  lead: 'client',
+  leads: 'clients',
+  lead_id: 'client_id',
+  lead_ids: 'client_ids',
+  leadId: 'clientId',
+  leadIds: 'clientIds',
+};
+
+function mapClientWireFields(value, fields) {
+  if (Array.isArray(value)) return value.map((item) => mapClientWireFields(item, fields));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    fields[key] || key,
+    mapClientWireFields(item, fields),
+  ]));
+}
+
 async function adminFetch(path, { method = 'GET', body } = {}) {
+  const usesClientContract = path.includes('/api/admin/leads');
+  const requestPath = usesClientContract
+    ? path.replace('/api/admin/leads', '/api/admin/clients')
+    : path;
+  const requestBody = usesClientContract ? mapClientWireFields(body, CLIENT_WIRE_FIELDS) : body;
+  const responseFields = Object.fromEntries(
+    Object.entries(CLIENT_WIRE_FIELDS).map(([legacy, current]) => [current, legacy])
+  );
   const token = getAdminToken();
   const headers = {
     Accept: 'application/json',
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (body) headers['Content-Type'] = 'application/json';
+  if (requestBody) headers['Content-Type'] = 'application/json';
 
   const res = await withTimeout(
-    fetch(path, {
+    fetch(requestPath, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: requestBody ? JSON.stringify(requestBody) : undefined,
     }),
     8000
   );
-  const data = await res.json().catch(() => ({}));
+  let data = await res.json().catch(() => ({}));
+  if (usesClientContract) data = mapClientWireFields(data, responseFields);
   if (!res.ok || data?.ok === false) {
     const error = new Error(data?.error || `Request failed (${res.status})`);
     error.status = res.status;
@@ -560,6 +587,92 @@ async function adminFetch(path, { method = 'GET', body } = {}) {
     throw error;
   }
   return data;
+}
+
+export async function getAdminSiteContent() {
+  return adminFetch('/api/admin/site-content');
+}
+
+export async function runAdminSiteContentAction(action, record) {
+  return adminFetch('/api/admin/site-content/action', {
+    method: 'POST',
+    body: { action, record },
+  });
+}
+
+export async function importLegacySiteContentAdmin(payload) {
+  return adminFetch('/api/admin/site-content/import-local', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function uploadAdminSiteImage(payload) {
+  const token = getAdminToken();
+  const response = await withTimeout(fetch('/api/crm/action', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ action: 'upload_image', ...payload }),
+  }), 30000);
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Image upload failed.');
+  }
+  return result;
+}
+
+export async function listAdminClients(options = {}) {
+  const result = await listAdminLeads({ ...options, limit: options.limit || 500 });
+  return { clients: result.leads, total: result.total, hasMore: result.hasMore };
+}
+
+export async function getAdminChatThreads({ includeArchived = false } = {}) {
+  const params = new URLSearchParams();
+  if (includeArchived) params.set('include_archived', '1');
+  const query = params.toString();
+  const data = await adminFetch(`/api/admin/messages/threads${query ? `?${query}` : ''}`);
+  return Array.isArray(data?.threads) ? data.threads : [];
+}
+
+export async function saveAdminChatThreadMeta(clientId, updates) {
+  if (!clientId) throw new Error('client_id required');
+  return adminFetch('/api/admin/messages/thread-meta', {
+    method: 'POST',
+    body: { client_id: clientId, ...updates },
+  });
+}
+
+export async function importLegacyAdminChatThreads(threads) {
+  return adminFetch('/api/admin/messages/threads/import', {
+    method: 'POST',
+    body: { threads },
+  });
+}
+
+export async function getStaffNotesAdmin(staffId) {
+  if (!staffId) return [];
+  const data = await adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes`);
+  return Array.isArray(data?.notes) ? data.notes : [];
+}
+
+export async function addStaffNoteAdmin(staffId, text) {
+  if (!staffId) throw new Error('staff_id required');
+  return adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes`, {
+    method: 'POST',
+    body: { text },
+  });
+}
+
+export async function importLegacyStaffNotesAdmin(staffId, notes) {
+  if (!staffId) throw new Error('staff_id required');
+  return adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes/import`, {
+    method: 'POST',
+    body: { notes },
+  });
 }
 
 // Hostinger Mail CRM integration. Tokens are submitted transiently and never persisted client-side.

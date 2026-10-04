@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './ProjectsTab.css';
+import { getAdminSiteContent, importLegacySiteContentAdmin, runAdminSiteContentAction, uploadAdminSiteImage } from '../../adminApi.js';
 import {
   Briefcase,
   Plus,
@@ -32,6 +33,7 @@ import {
 import { DEMO_SHOWCASE_PROJECT_IDS } from '../../../../types/showcase';
 
 const STORAGE_KEY = 'codex_custom_projects';
+const STORAGE_MIGRATION_KEY = 'codex_custom_projects_imported_v1';
 
 const CATEGORIES = [
   'All',
@@ -44,37 +46,68 @@ const CATEGORIES = [
 ];
 
 export default function ProjectsTab({ showNotification = () => {} }) {
-  // Preserve user-created projects but remove the known built-in samples.
-  const [projects, setProjects] = useState(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed)) {
-            return parsed.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
-          }
-        }
-      } catch (err) {
-        console.error('Failed to parse stored projects', err);
-      }
-    }
-    return [];
-  });
+  const [projects, setProjects] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      if (!Array.isArray(parsed)) return;
-      const cleaned = parsed.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+    let active = true;
+    const normalize = (project) => ({
+      ...project,
+      id: project.id,
+      client: project.client || project.site_name || '',
+      category: project.category || 'Websites & Web Apps',
+      image: project.image || project.image_url || '',
+      shortDescription: project.shortDescription || project.description || '',
+      detailedDescription: project.detailedDescription || project.description || '',
+      techStack: Array.isArray(project.techStack) ? project.techStack : [],
+      metrics: Array.isArray(project.metrics) ? project.metrics : [],
+      features: Array.isArray(project.features) ? project.features : [],
+      lighthouse: project.lighthouse || {},
+      published: project.published !== false && project.is_published !== false,
+      featured: Boolean(project.featured),
+    });
+    const load = async () => {
+      setIsLoading(true);
+      setLoadError('');
+      try {
+        const legacyRaw = window.localStorage.getItem(STORAGE_KEY);
+        if (legacyRaw && window.localStorage.getItem(STORAGE_MIGRATION_KEY) !== '1') {
+          const legacy = JSON.parse(legacyRaw);
+          if (!Array.isArray(legacy)) throw new Error('The saved portfolio backup is not a project list.');
+          const records = legacy.filter((project) => !DEMO_SHOWCASE_PROJECT_IDS.has(project.id));
+          const migrated = [];
+          for (const project of records) {
+            const next = { ...project };
+            if (typeof next.image === 'string' && next.image.startsWith('data:image/')) {
+              const uploaded = await uploadAdminSiteImage({
+                name: `${String(next.title || 'portfolio-project').replace(/[^a-z0-9-_]+/gi, '-')}.jpg`,
+                data: next.image,
+              });
+              next.image = uploaded.url;
+            }
+            migrated.push(next);
+          }
+          const result = await importLegacySiteContentAdmin({ showcaseProjects: migrated });
+          if (Number(result?.skipped || 0) === 0) {
+            window.localStorage.setItem(STORAGE_MIGRATION_KEY, '1');
+            window.localStorage.removeItem(STORAGE_KEY);
+          } else {
+            showNotification(`${result.imported || 0} old portfolio projects were saved. ${result.skipped} need review; the browser backup was kept.`);
+          }
+        }
+        const content = await getAdminSiteContent();
+        if (active) setProjects((content.projects || []).map(normalize));
+      } catch (error) {
+        if (active) setLoadError(error.message || 'Portfolio projects could not be loaded.');
+      } finally {
+        if (active) setIsLoading(false);
       }
-    } catch (err) {
-      console.error('Failed to clean stored project samples', err);
-    }
+    };
+    load();
+    return () => { active = false; };
   }, []);
 
   const [activeCategory, setActiveCategory] = useState('All');
@@ -119,35 +152,67 @@ export default function ProjectsTab({ showNotification = () => {} }) {
 
   const fileInputRef = useRef(null);
 
-  // Synchronize to localStorage, trigger storage events and postMessage to preview iframes
-  const persistAndBroadcast = (updatedProjects) => {
-    setProjects(updatedProjects);
+  const persistAndBroadcast = async (updatedProjects) => {
+    setIsSaving(true);
+    const changed = updatedProjects.filter((project) => {
+      const previous = projects.find((item) => String(item.id) === String(project.id));
+      return !previous || JSON.stringify(previous) !== JSON.stringify(project);
+    });
+    const removed = projects.filter((project) =>
+      !updatedProjects.some((item) => String(item.id) === String(project.id))
+    );
+    const idMap = new Map();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedProjects));
-      window.dispatchEvent(new CustomEvent('codex_projects_updated', { detail: updatedProjects }));
-
-      // Broadcast to any active preview iframes
-      const iframes = document.querySelectorAll('iframe');
-      iframes.forEach(iframe => {
-        try {
-          iframe.contentWindow?.postMessage({
-            type: 'CODEX_PROJECTS_UPDATE',
-            projects: updatedProjects,
-          }, '*');
-        } catch {}
+      for (const project of changed) {
+        const result = await runAdminSiteContentAction('save_showcase_project', {
+          ...project,
+          is_published: project.published ? 1 : 0,
+        });
+        idMap.set(String(project.id), result.id);
+      }
+      for (const project of removed) {
+        await runAdminSiteContentAction('delete_project', { id: project.id });
+      }
+      const saved = updatedProjects.map((project) => ({
+        ...project,
+        id: idMap.get(String(project.id)) || project.id,
+      }));
+      setProjects(saved);
+      const detail = saved.filter((project) => project.published !== false);
+      window.dispatchEvent(new CustomEvent('codex_projects_updated', { detail }));
+      document.querySelectorAll('iframe').forEach((iframe) => {
+        iframe.contentWindow?.postMessage({ type: 'CODEX_PROJECTS_UPDATE', projects: detail }, '*');
       });
-    } catch (e) {
-      console.error('Failed to persist projects', e);
+      return true;
+    } catch (error) {
+      setLoadError(error.message || 'The portfolio changes could not be saved.');
+      showNotification(error.message || 'The portfolio changes could not be saved.');
+      return false;
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleSyncToSite = () => {
+  const handleSyncToSite = async () => {
     setIsSyncing(true);
-    persistAndBroadcast(projects);
-    setTimeout(() => {
+    try {
+      const content = await getAdminSiteContent();
+      const current = (content.projects || []).map((project) => ({
+        ...project,
+        client: project.client || project.site_name || '',
+        image: project.image || project.image_url || '',
+        shortDescription: project.shortDescription || project.description || '',
+        detailedDescription: project.detailedDescription || project.description || '',
+        published: project.published !== false && project.is_published !== false,
+        featured: Boolean(project.featured),
+      }));
+      setProjects(current);
+      showNotification('Portfolio refreshed from the shared database.');
+    } catch (error) {
+      showNotification(error.message || 'Portfolio refresh failed.');
+    } finally {
       setIsSyncing(false);
-      showNotification('Client projects successfully synced to live portfolio showcase.');
-    }, 400);
+    }
   };
 
   // Open modal for new project
@@ -219,25 +284,25 @@ export default function ProjectsTab({ showNotification = () => {} }) {
   };
 
   // Toggle Featured status
-  const handleToggleFeatured = (id, e) => {
+  const handleToggleFeatured = async (id, e) => {
     e?.stopPropagation();
     const updated = projects.map(p => p.id === id ? { ...p, featured: !p.featured } : p);
-    persistAndBroadcast(updated);
+    if (!(await persistAndBroadcast(updated))) return;
     const target = updated.find(p => p.id === id);
     showNotification(target.featured ? `Marked "${target.title}" as Featured.` : `Removed Featured from "${target.title}".`);
   };
 
   // Toggle Published status
-  const handleTogglePublished = (id, e) => {
+  const handleTogglePublished = async (id, e) => {
     e?.stopPropagation();
     const updated = projects.map(p => p.id === id ? { ...p, published: !p.published } : p);
-    persistAndBroadcast(updated);
+    if (!(await persistAndBroadcast(updated))) return;
     const target = updated.find(p => p.id === id);
     showNotification(target.published ? `Published "${target.title}" to main site.` : `Unpublished "${target.title}" (hidden from main site).`);
   };
 
   // Duplicate Project
-  const handleDuplicateProject = (proj, e) => {
+  const handleDuplicateProject = async (proj, e) => {
     e?.stopPropagation();
     const newProj = {
       ...proj,
@@ -247,58 +312,71 @@ export default function ProjectsTab({ showNotification = () => {} }) {
       featured: false,
     };
     const updated = [newProj, ...projects];
-    persistAndBroadcast(updated);
-    showNotification(`Duplicated "${proj.title}".`);
+    if (await persistAndBroadcast(updated)) showNotification(`Duplicated "${proj.title}".`);
   };
 
   // Delete single project
-  const handleDeleteProject = (id, e) => {
+  const handleDeleteProject = async (id, e) => {
     e?.stopPropagation();
     if (window.confirm('Are you sure you want to delete this project from the showcase?')) {
       const updated = projects.filter(p => p.id !== id);
-      persistAndBroadcast(updated);
-      setSelectedIds(prev => prev.filter(x => x !== id));
-      showNotification('Project deleted.');
+      if (await persistAndBroadcast(updated)) {
+        setSelectedIds(prev => prev.filter(x => x !== id));
+        showNotification('Project archived.');
+      }
     }
   };
 
   // Bulk Delete
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedIds.length === 0) return;
     if (window.confirm(`Are you sure you want to delete ${selectedIds.length} selected project(s)?`)) {
+      const count = selectedIds.length;
       const updated = projects.filter(p => !selectedIds.includes(p.id));
-      persistAndBroadcast(updated);
+      if (!(await persistAndBroadcast(updated))) return;
       setSelectedIds([]);
-      showNotification(`Deleted ${selectedIds.length} project(s).`);
+      showNotification(`Archived ${count} project(s).`);
     }
   };
 
   // Bulk Publish / Unpublish
-  const handleBulkPublish = (publish = true) => {
+  const handleBulkPublish = async (publish = true) => {
     if (selectedIds.length === 0) return;
+    const count = selectedIds.length;
     const updated = projects.map(p => selectedIds.includes(p.id) ? { ...p, published: publish } : p);
-    persistAndBroadcast(updated);
-    showNotification(`${publish ? 'Published' : 'Unpublished'} ${selectedIds.length} project(s).`);
+    if (await persistAndBroadcast(updated)) showNotification(`${publish ? 'Published' : 'Unpublished'} ${count} project(s).`);
   };
 
-  // Image Upload handler (reads to Base64 DataURL or handles file)
-  const handleImageFileChange = (e) => {
+  // Store uploaded image files in the media directory; only their URL goes in project data.
+  const handleImageFileChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
       showNotification('Image file is large (>5MB). Please select a compressed image.');
+      e.target.value = '';
+      return;
     }
-
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
+    setIsUploadingImage(true);
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('The image could not be read.'));
+        reader.readAsDataURL(file);
+      });
+      const uploaded = await uploadAdminSiteImage({ name: file.name, data });
       setFormData(prev => ({
         ...prev,
-        image: uploadEvent.target.result
+        image: uploaded.url,
       }));
-      showNotification('Image loaded into project preview.');
-    };
-    reader.readAsDataURL(file);
+      showNotification('Image uploaded and ready to use.');
+    } catch (error) {
+      showNotification(error.message || 'Image upload failed.');
+    } finally {
+      setIsUploadingImage(false);
+      e.target.value = '';
+    }
   };
 
   // Add Tech Tag
@@ -347,7 +425,7 @@ export default function ProjectsTab({ showNotification = () => {} }) {
   };
 
   // Save Modal Project
-  const handleSaveProjectForm = (e) => {
+  const handleSaveProjectForm = async (e) => {
     e.preventDefault();
     if (!formData.title.trim()) {
       showNotification('Please enter a project title.');
@@ -379,14 +457,14 @@ export default function ProjectsTab({ showNotification = () => {} }) {
     let updatedList;
     if (editingProject) {
       updatedList = projects.map(p => p.id === editingProject.id ? projectRecord : p);
-      showNotification(`Updated project "${projectRecord.title}".`);
     } else {
       updatedList = [projectRecord, ...projects];
-      showNotification(`Uploaded new project "${projectRecord.title}".`);
     }
 
-    persistAndBroadcast(updatedList);
-    setIsModalOpen(false);
+    if (await persistAndBroadcast(updatedList)) {
+      setIsModalOpen(false);
+      showNotification(`${editingProject ? 'Updated' : 'Added'} project "${projectRecord.title}".`);
+    }
   };
 
   // Filtered & Searched Projects list

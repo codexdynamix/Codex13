@@ -18,7 +18,6 @@ import { Reveal } from "@/components/Reveal";
 import { useContactModal } from "@/context/ContactModalContext";
 import { cn } from "@/lib/utils";
 import type { ShowcaseProject } from "@/types/showcase";
-import { DEMO_SHOWCASE_PROJECT_IDS } from "@/types/showcase";
 
 const DEFAULT_CATEGORIES = [
   "All",
@@ -30,66 +29,64 @@ const DEFAULT_CATEGORIES = [
 ];
 
 export function ProjectShowcaseGrid() {
-  const [projects, setProjects] = useState<ShowcaseProject[]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const stored = localStorage.getItem("codex_custom_projects");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed)) {
-            return parsed.filter(
-              (p: any) => p.published !== false && !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
-            );
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to read custom projects from storage", err);
-      }
-    }
-    return [];
-  });
+  const [projects, setProjects] = useState<ShowcaseProject[]>([]);
+  const [projectsError, setProjectsError] = useState("");
 
-  // Listen for real-time project updates from the CRM
+  // Published portfolio records are read from the shared database-backed API.
   useEffect(() => {
-    const handleProjectsSync = () => {
+    let active = true;
+    const loadProjects = async () => {
       try {
-        const stored = localStorage.getItem("codex_custom_projects");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed)) {
-            const cleaned = parsed.filter(
-              (p: any) => !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
-            );
-            if (cleaned.length !== parsed.length) {
-              localStorage.setItem("codex_custom_projects", JSON.stringify(cleaned));
-            }
-            setProjects(cleaned.filter((p: any) => p.published !== false));
-          }
-        } else {
-          setProjects([]);
+        const response = await fetch("/api/public/content", {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) throw new Error(`Portfolio request failed (${response.status}).`);
+        const payload = await response.json();
+        if (!payload?.ok || !Array.isArray(payload.projects)) {
+          throw new Error("The portfolio response was invalid.");
         }
-      } catch (err) {
-        console.warn("Failed to sync updated projects", err);
+        if (!active) return;
+        setProjects(payload.projects.map((project: any) => ({
+          ...project,
+          id: project.id,
+          client: project.client || project.site_name || "",
+          image: project.image || project.image_url || "",
+          shortDescription: project.shortDescription || project.description || "",
+          detailedDescription: project.detailedDescription || project.description || "",
+          published: project.published !== false && project.is_published !== false,
+        })));
+        setProjectsError("");
+      } catch (error) {
+        if (!active) return;
+        setProjects([]);
+        setProjectsError(error instanceof Error ? error.message : "Portfolio projects are unavailable.");
       }
     };
-    handleProjectsSync();
 
-    window.addEventListener("storage", handleProjectsSync);
+    const receiveProjectUpdate = (rows: unknown) => {
+      if (!Array.isArray(rows)) return;
+      setProjects((rows as any[]).filter((project) => project.published !== false).map((project) => ({
+        ...project,
+        client: project.client || project.site_name || "",
+        image: project.image || project.image_url || "",
+        shortDescription: project.shortDescription || project.description || "",
+        detailedDescription: project.detailedDescription || project.description || "",
+      })));
+      setProjectsError("");
+    };
+    const handleProjectsSync = (event: Event) => receiveProjectUpdate((event as CustomEvent).detail);
+    loadProjects();
     window.addEventListener("codex_projects_updated", handleProjectsSync);
 
     const handleWindowMessage = (event: MessageEvent) => {
       if (event.data?.type === "CODEX_PROJECTS_UPDATE" && Array.isArray(event.data.projects)) {
-        setProjects(
-          event.data.projects.filter(
-            (p: any) => p.published !== false && !DEMO_SHOWCASE_PROJECT_IDS.has(p.id),
-          ),
-        );
+        receiveProjectUpdate(event.data.projects);
       }
     };
     window.addEventListener("message", handleWindowMessage);
 
     return () => {
-      window.removeEventListener("storage", handleProjectsSync);
+      active = false;
       window.removeEventListener("codex_projects_updated", handleProjectsSync);
       window.removeEventListener("message", handleWindowMessage);
     };
@@ -157,6 +154,11 @@ export function ProjectShowcaseGrid() {
     >
       <div id="projects" className="relative -top-24" />
       <div className="shell">
+        {projectsError && (
+          <p role="status" className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Portfolio projects could not be loaded: {projectsError}
+          </p>
+        )}
         {/* Section Header with Reveal Animation */}
         <Reveal direction="up" threshold={0.1}>
           <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">

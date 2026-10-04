@@ -11,6 +11,9 @@ ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
 function jsonResponse(mixed $data, int $status = 200): void {
+    if (!empty($GLOBALS['clientApiContract'])) {
+        $data = mapClientApiResponse($data);
+    }
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('Access-Control-Allow-Origin: *');
@@ -18,6 +21,32 @@ function jsonResponse(mixed $data, int $status = 200): void {
     header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
     echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+function mapClientApiResponse(mixed $value): mixed {
+    if (!is_array($value)) return $value;
+    $keys = [
+        'lead' => 'client',
+        'leads' => 'clients',
+        'lead_id' => 'client_id',
+        'lead_ids' => 'client_ids',
+        'leadId' => 'clientId',
+        'leadIds' => 'clientIds',
+        'lead_count' => 'client_count',
+        'total_leads' => 'total_clients',
+    ];
+    $mapped = [];
+    foreach ($value as $key => $item) {
+        $nextKey = is_string($key) ? ($keys[$key] ?? $key) : $key;
+        if (is_array($item)) {
+            $item = mapClientApiResponse($item);
+        } elseif (is_string($item) && in_array($key, ['error', 'message'], true)) {
+            $item = preg_replace('/\bleads\b/i', 'clients', $item);
+            $item = preg_replace('/\blead\b/i', 'client', $item);
+        }
+        $mapped[$nextKey] = $item;
+    }
+    return $mapped;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -1022,6 +1051,103 @@ function initSchema(PDO $pdo): void {
     ensureDatabaseColumn($pdo, 'portal_sessions', 'is_impersonating', 'INTEGER NOT NULL DEFAULT 0');
     ensureDatabaseColumn($pdo, 'portal_sessions', 'admin_user_id', 'TEXT NULL');
     migrateLegacyClientIdentity($pdo);
+
+    // Keep the rich portfolio editor and the public portfolio on the same
+    // project row as the standard Site CRM editor.
+    ensureDatabaseColumn($pdo, 'projects', 'showcase_json', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'projects', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'blogs', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'reviews', 'deleted_at', 'TEXT NULL');
+    ensureDatabaseColumn($pdo, 'backlinks', 'deleted_at', 'TEXT NULL');
+
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    if ($driver === 'sqlite') {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS staff_notes (
+                id VARCHAR(191) PRIMARY KEY,
+                staff_id VARCHAR(191) NOT NULL REFERENCES staff_users(id),
+                created_by_staff_id VARCHAR(191) NOT NULL REFERENCES staff_users(id),
+                body TEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_staff_notes_staff_created
+                ON staff_notes (staff_id, created_at);
+            CREATE TABLE IF NOT EXISTS client_chat_metadata (
+                client_id VARCHAR(191) PRIMARY KEY REFERENCES clients(id),
+                assigned_staff_id VARCHAR(191) NULL REFERENCES staff_users(id),
+                status VARCHAR(24) NOT NULL DEFAULT 'active',
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                updated_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS site_content_imports (
+                source_key VARCHAR(255) PRIMARY KEY,
+                record_type VARCHAR(32) NOT NULL,
+                record_id VARCHAR(191) NOT NULL,
+                imported_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS client_chat_imports (
+                source_key VARCHAR(255) PRIMARY KEY,
+                client_id VARCHAR(191) NOT NULL REFERENCES clients(id),
+                message_id VARCHAR(191) NOT NULL,
+                imported_at VARCHAR(40) NOT NULL
+            );
+        ");
+
+        // Legacy business tables predate declared foreign keys. Guard new
+        // references at the database boundary without rebuilding user tables.
+        $clientIdTables = $pdo->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            ->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($clientIdTables as $table) {
+            if ($table === 'clients' || !in_array('client_id', databaseColumnNames($pdo, (string)$table), true)) continue;
+            $tableName = (string)$table;
+            $triggerKey = preg_replace('/[^A-Za-z0-9_]/', '_', $tableName);
+            $pdo->exec("CREATE TRIGGER IF NOT EXISTS guard_{$triggerKey}_client_insert
+                BEFORE INSERT ON `{$tableName}`
+                WHEN NEW.client_id IS NOT NULL AND NEW.client_id <> ''
+                    AND NOT EXISTS (SELECT 1 FROM clients WHERE id = NEW.client_id)
+                BEGIN SELECT RAISE(ABORT, 'Unknown Client identity'); END");
+            $pdo->exec("CREATE TRIGGER IF NOT EXISTS guard_{$triggerKey}_client_update
+                BEFORE UPDATE OF client_id ON `{$tableName}`
+                WHEN NEW.client_id IS NOT NULL AND NEW.client_id <> ''
+                    AND NOT EXISTS (SELECT 1 FROM clients WHERE id = NEW.client_id)
+                BEGIN SELECT RAISE(ABORT, 'Unknown Client identity'); END");
+        }
+    } else {
+        // MySQL installs use application-level ownership validation because
+        // legacy tables use mixed key widths that cannot be safely rebuilt
+        // without an explicit database migration window.
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS staff_notes (
+                id VARCHAR(191) PRIMARY KEY,
+                staff_id VARCHAR(191) NOT NULL,
+                created_by_staff_id VARCHAR(191) NOT NULL,
+                body TEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                INDEX idx_staff_notes_staff_created (staff_id, created_at)
+            );
+            CREATE TABLE IF NOT EXISTS client_chat_metadata (
+                client_id VARCHAR(191) PRIMARY KEY,
+                assigned_staff_id VARCHAR(191) NULL,
+                status VARCHAR(24) NOT NULL DEFAULT 'active',
+                is_archived TINYINT(1) NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL,
+                updated_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS site_content_imports (
+                source_key VARCHAR(255) PRIMARY KEY,
+                record_type VARCHAR(32) NOT NULL,
+                record_id VARCHAR(191) NOT NULL,
+                imported_at VARCHAR(40) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS client_chat_imports (
+                source_key VARCHAR(255) PRIMARY KEY,
+                client_id VARCHAR(191) NOT NULL,
+                message_id VARCHAR(191) NOT NULL,
+                imported_at VARCHAR(40) NOT NULL
+            );
+        ");
+    }
 }
 
 function seedInitialData(PDO $pdo): void {

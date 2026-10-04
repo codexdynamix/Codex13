@@ -2,6 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ContentWorkspace from './ContentWorkspace.jsx';
 import LiveChatWorkspace from './LiveChatWorkspace.jsx';
 import EnquiriesWorkspace from './EnquiriesWorkspace.jsx';
+import {
+  getAdminSiteContent,
+  importLegacySiteContentAdmin,
+  listAdminClients,
+  runAdminSiteContentAction,
+  uploadAdminSiteImage,
+} from '../adminApi.js';
 
 const TABS = [
   ['overview', 'Overview'],
@@ -15,79 +22,20 @@ const emptyForms = {
   project: { title: '', site_name: '', site_url: '', description: '', category: 'Web Development', image_url: '', is_published: true },
 };
 
-const localSiteCrmStore = {
-  enquiries: [],
-  blogs: [],
-  reviews: [],
-  projects: [],
-  backlinks: [],
-  stats: { enquiries: 0, visitors: 0, publishedBlogs: 0, publishedProjects: 0, publishedReviews: 0 },
-  settings: { webhookUrl: '' },
-};
-
 const SITE_CRM_STORAGE_KEY = 'codex_site_crm_content';
-
-function readSiteCrmStore() {
-  try {
-    const stored = window.localStorage.getItem(SITE_CRM_STORAGE_KEY);
-    if (!stored) return localSiteCrmStore;
-    const parsed = JSON.parse(stored);
-    return {
-      ...localSiteCrmStore,
-      ...parsed,
-      enquiries: Array.isArray(parsed.enquiries) ? parsed.enquiries : [],
-      blogs: Array.isArray(parsed.blogs) ? parsed.blogs : [],
-      reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
-      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
-      backlinks: Array.isArray(parsed.backlinks) ? parsed.backlinks : [],
-      settings: { ...localSiteCrmStore.settings, ...(parsed.settings || {}) },
-    };
-  } catch {
-    return localSiteCrmStore;
-  }
-}
-
-function persistSiteCrmStore() {
-  try {
-    window.localStorage.setItem(SITE_CRM_STORAGE_KEY, JSON.stringify(localSiteCrmStore));
-  } catch {
-    // Storage can be unavailable in private browsing; the in-memory store remains usable.
-  }
-}
+const SITE_CRM_MIGRATION_KEY = 'codex_site_crm_content_imported_v1';
 
 async function crmAction(action, payload = {}) {
-  const id = payload.id || Date.now();
-  if (action === 'add_backlink') localSiteCrmStore.backlinks.push({ id, ...payload });
-  if (action === 'update_backlink') localSiteCrmStore.backlinks = localSiteCrmStore.backlinks.map((x) => (x.id === id ? { ...x, ...payload } : x));
-  if (action === 'delete_backlink') localSiteCrmStore.backlinks = localSiteCrmStore.backlinks.filter((x) => x.id !== id);
-  if (action === 'save_blog') localSiteCrmStore.blogs.push({ id, ...payload });
-  if (action === 'update_blog') localSiteCrmStore.blogs = localSiteCrmStore.blogs.map((x) => (x.id === id ? { ...x, ...payload } : x));
-  if (action === 'delete_blog') localSiteCrmStore.blogs = localSiteCrmStore.blogs.filter((x) => x.id !== id);
-  if (action === 'save_review') localSiteCrmStore.reviews.push({ id, ...payload });
-  if (action === 'update_review') localSiteCrmStore.reviews = localSiteCrmStore.reviews.map((x) => (x.id === id ? { ...x, ...payload } : x));
-  if (action === 'delete_review') localSiteCrmStore.reviews = localSiteCrmStore.reviews.filter((x) => x.id !== id);
-  if (action === 'save_project') localSiteCrmStore.projects.push({ id, ...payload });
-  if (action === 'update_project') localSiteCrmStore.projects = localSiteCrmStore.projects.map((x) => (x.id === id ? { ...x, ...payload } : x));
-  if (action === 'delete_project') localSiteCrmStore.projects = localSiteCrmStore.projects.filter((x) => x.id !== id);
-  if (action === 'save_enquiry') localSiteCrmStore.enquiries.unshift({ id, ...payload });
-  if (action === 'delete_enquiry') localSiteCrmStore.enquiries = localSiteCrmStore.enquiries.filter((x) => x.id !== id);
-  if (action === 'update_enquiry_status') {
-    localSiteCrmStore.enquiries = localSiteCrmStore.enquiries.map((x) => (x.id === id ? { ...x, status: payload.status } : x));
+  if (action === 'restore_backup') {
+    return importLegacySiteContentAdmin(payload.backupData || {});
   }
-  if (action === 'save_webhook') {
-    localSiteCrmStore.settings = { ...localSiteCrmStore.settings, webhookUrl: payload.url || '' };
+  if (action === 'upload_image') {
+    return uploadAdminSiteImage(payload);
   }
-  if (action === 'restore_backup' && payload.backupData) {
-    const restored = payload.backupData;
-    localSiteCrmStore.enquiries = Array.isArray(restored.enquiries) ? restored.enquiries : [];
-    localSiteCrmStore.blogs = Array.isArray(restored.blogs) ? restored.blogs : [];
-    localSiteCrmStore.reviews = Array.isArray(restored.reviews) ? restored.reviews : [];
-    localSiteCrmStore.projects = Array.isArray(restored.projects) ? restored.projects : [];
-    localSiteCrmStore.backlinks = Array.isArray(restored.backlinks) ? restored.backlinks : [];
-    localSiteCrmStore.settings = { ...localSiteCrmStore.settings, ...(restored.settings || {}) };
+  if (action === 'save_webhook' || action === 'test_webhook' || action === 'change_password') {
+    throw new Error('This action is not available through the persistent Site CRM API.');
   }
-  persistSiteCrmStore();
-  return { ok: true, url: payload.data || '' };
+  return runAdminSiteContentAction(action, payload);
 }
 
 function Button({ children, onClick, danger = false, secondary = false, disabled = false }) {
@@ -136,37 +84,67 @@ export default function SiteCrmWorkspace({
 }) {
   const [tab, setTab] = useState(defaultTab);
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState('');
   const [formType, setFormType] = useState(null);
   const [editing, setEditing] = useState(null);
   const [webhook, setWebhook] = useState('');
-  const [chatThreads, setChatThreads] = useState([]);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [selectedThread, setSelectedThread] = useState(null);
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [uploading, setUploading] = useState(false);
 
   const load = async () => {
     setLoading(true);
+    setLoadError('');
     try {
-      const stored = readSiteCrmStore();
-      Object.assign(localSiteCrmStore, stored);
+      const legacyRaw = window.localStorage.getItem(SITE_CRM_STORAGE_KEY);
+      if (legacyRaw && window.localStorage.getItem(SITE_CRM_MIGRATION_KEY) !== '1') {
+        const legacy = JSON.parse(legacyRaw);
+        const result = await importLegacySiteContentAdmin({
+          blogs: legacy.blogs || [],
+          reviews: legacy.reviews || [],
+          projects: legacy.projects || [],
+          backlinks: legacy.backlinks || [],
+          enquiries: legacy.enquiries || [],
+        });
+        if (Number(result?.skipped || 0) === 0) {
+          window.localStorage.setItem(SITE_CRM_MIGRATION_KEY, '1');
+          window.localStorage.removeItem(SITE_CRM_STORAGE_KEY);
+        } else {
+          showNotification(`${result.imported || 0} old Site CRM records were saved. ${result.skipped} need review; their browser backup was kept.`);
+        }
+      }
+      const [content, clientResult] = await Promise.all([
+        getAdminSiteContent(),
+        listAdminClients({ limit: 500 }),
+      ]);
+      const clients = clientResult.clients || [];
+      const enquiries = clients.filter((client) => client.source && /website|contact|enquiry/i.test(client.source));
       setData({
-        ...stored,
-        enquiries: [...stored.enquiries],
-        blogs: [...stored.blogs],
-        reviews: [...stored.reviews],
-        projects: [...stored.projects],
-        backlinks: [...stored.backlinks],
+        enquiries,
+        blogs: content.blogs || [],
+        reviews: content.reviews || [],
+        projects: content.projects || [],
+        backlinks: content.backlinks || [],
+        stats: {
+          totalLeads: clients.length,
+          totalEnquiries: enquiries.length,
+          totalBlogs: (content.blogs || []).length,
+          totalReviews: (content.reviews || []).length,
+          totalProjects: (content.projects || []).length,
+        },
+        settings: content.settings || {},
       });
-      setWebhook(stored.settings?.webhookUrl || '');
+      setWebhook(content.settings?.webhookUrl || '');
+    } catch (error) {
+      setLoadError(error.message || 'The Site CRM data could not be loaded.');
+      setData(null);
     } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
   useEffect(() => { setTab(defaultTab); }, [defaultTab]);
 
   const run = async (action, payload = {}) => {
-    try { await crmAction(action, payload); await load(); showNotification('Saved successfully.'); }
+    try { await crmAction(action, payload); await load(); showNotification('Saved to the database.'); }
     catch (error) { window.alert(error.message); }
   };
   const enquiries = data?.enquiries || [];
@@ -179,14 +157,6 @@ export default function SiteCrmWorkspace({
   const closeForm = () => { setFormType(null); setEditing(null); };
   const edit = (type, item) => { setFormType(type); setEditing(item); };
 
-  useEffect(() => {
-    if (tab !== 'chat') return;
-    setChatThreads([]);
-  }, [tab]);
-  const selectThread = async (thread) => {
-    setSelectedThread(thread);
-    setChatMessages([]);
-  };
   const changePassword = async (event) => {
     event.preventDefault();
     if (passwords.newPassword !== passwords.confirmPassword) return window.alert('New passwords do not match.');
