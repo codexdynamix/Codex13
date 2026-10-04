@@ -1,4 +1,4 @@
-import { readPortalSession } from '../services/portalAuth';
+import { portalAuthHeaders, readPortalSession } from '../services/portalAuth';
 
 export interface ProviderMailbox { resourceId: string; address: string; assignedClientId?: string | null; assignedClientName?: string | null }
 export interface ClientMailbox { id: string; clientId: string; providerMailboxId: string; emailAddress: string; displayName: string; enabled: boolean; createdAt: string; updatedAt: string }
@@ -13,7 +13,7 @@ type Result<T> = T & { pagination?: Pagination };
 async function portalRequest<T>(path: string, options: RequestInit = {}, binary = false): Promise<T> {
   const session = readPortalSession();
   if (!session?.token) throw new Error('Your portal session has expired. Sign in again.');
-  const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${session.token}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+  const response = await fetch(path, { ...options, credentials: 'same-origin', headers: { ...portalAuthHeaders(session.token), ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
   if (!response.ok) {
     if (binary) throw new Error(`Attachment download failed (${response.status}).`);
     const data = await response.json().catch(() => ({}));

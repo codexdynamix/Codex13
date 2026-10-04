@@ -50,3 +50,11 @@ Thumbs.db
 /artifacts/codex-dynamics/data/
 /artifacts/codex-dynamics/public/api/data/*.sqlite
 /artifacts/codex-dynamics/public/api/data/*.sqlite3
+
+# Runtime databases and local data (never commit)
+artifacts/codex-dynamics/data/
+artifacts/codex-dynamics/public/api/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data-store.json

@@ -13,7 +13,8 @@
     "test:api": "node --test scripts/admin-api.integration.test.mjs",
     "lint": "eslint artifacts/codex-dynamics/src",
     "typecheck": "npm run typecheck --workspace=@workspace/codex-dynamics",
-    "package:hostinger": "node scripts/build-hostinger-zip.mjs"
+    "package:hostinger": "node scripts/build-hostinger-zip.mjs",
+    "create-admin": "php scripts/create-super-admin.php"
   },
   "overrides": {
     "esbuild": "0.28.2",
