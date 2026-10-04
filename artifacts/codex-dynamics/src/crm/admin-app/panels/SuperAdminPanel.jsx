@@ -3302,11 +3302,11 @@ function SuperAdminPanel({ data, currentUser, setData, assignOfficeManager, crea
             ) : activeTab === 'Accounting' ? (
               <AccountingWorkspace showNotification={showPanelNotification} />
             ) : activeTab === 'Mail' ? (
-              <SiteSettingsTab showNotification={showNotification} initialSubTab="hostinger-mail" standaloneSection />
+              <SiteSettingsTab key="mail" showNotification={showNotification} initialSubTab="hostinger-mail" standaloneSection />
             ) : activeTab === 'Security & System' ? (
-              <SiteSettingsTab showNotification={showNotification} initialSubTab="security" standaloneSection />
+              <SiteSettingsTab key="security" showNotification={showNotification} initialSubTab="security" standaloneSection />
             ) : activeTab === 'SEO & Search' ? (
-              <SiteSettingsTab showNotification={showNotification} initialSubTab="seo" standaloneSection />
+              <SiteSettingsTab key="seo" showNotification={showNotification} initialSubTab="seo" standaloneSection />
             ) : activeTab === 'Staff' ? (
               <div style={{ padding: 24 }}>
                 <div className="crm-tab-row" style={{ marginBottom: 18 }}>
