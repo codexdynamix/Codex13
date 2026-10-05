@@ -24,21 +24,36 @@ if ($apiPath === '/crm/action') {
         jsonResponse(['ok' => true, 'site_config' => $record['site_config']]);
     }
 
+    // Every remaining action edits public site content, so it needs a signed-in staff member.
+    requireActiveAdminStaff($pdo, findSession($pdo, 'admin_sessions', 'user_id'));
+
     // Upload picture
     if ($action === 'upload_image') {
-        $name = preg_replace('/[^a-zA-Z0-9_\.-]/', '_', $input['name'] ?? 'image.png');
-        $dataUri = $input['data'] ?? '';
-        if (preg_match('/^data:image\/(\w+);base64,/', $dataUri, $matches)) {
-            $ext = $matches[1];
-            $base64 = substr($dataUri, strpos($dataUri, ',') + 1);
-            $decoded = base64_decode($base64);
-            $uploadsDir = __DIR__ . '/../uploads';
-            if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
-            $filename = time() . '_' . $name;
-            file_put_contents("{$uploadsDir}/{$filename}", $decoded);
-            jsonResponse(['ok' => true, 'url' => "/uploads/{$filename}"]);
+        $allowedTypes = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_GIF => 'gif', IMAGETYPE_WEBP => 'webp'];
+        $dataUri = (string)($input['data'] ?? $input['payload']['data'] ?? '');
+        $decoded = preg_match('/^data:image\/[\w.+-]+;base64,/', $dataUri)
+            ? base64_decode(substr($dataUri, strpos($dataUri, ',') + 1), true)
+            : false;
+        if ($decoded === false || strlen($decoded) > 10 * 1024 * 1024) {
+            jsonResponse(['ok' => false, 'error' => 'Invalid image payload (PNG, JPEG, GIF or WebP up to 10 MB).'], 400);
         }
-        jsonResponse(['ok' => false, 'error' => 'Invalid image payload'], 400);
+        $imageInfo = @getimagesizefromstring($decoded);
+        $ext = $imageInfo ? ($allowedTypes[$imageInfo[2]] ?? null) : null;
+        if ($ext === null) {
+            jsonResponse(['ok' => false, 'error' => 'Invalid image payload (PNG, JPEG, GIF or WebP up to 10 MB).'], 400);
+        }
+        $baseName = pathinfo((string)($input['name'] ?? $input['payload']['name'] ?? 'image'), PATHINFO_FILENAME);
+        $baseName = trim((string)preg_replace('/[^a-zA-Z0-9_-]+/', '-', $baseName), '-') ?: 'image';
+        $uploadsDir = dirname(__DIR__, 2) . '/uploads';
+        if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+        if (!file_exists("{$uploadsDir}/.htaccess")) {
+            @file_put_contents("{$uploadsDir}/.htaccess", "Options -ExecCGI -Indexes\nRemoveHandler .php .phtml .phar\n<FilesMatch \"\\.(php|phtml|phar)$\">\n  Require all denied\n</FilesMatch>\n");
+        }
+        $filename = time() . '_' . bin2hex(random_bytes(4)) . '_' . substr($baseName, 0, 60) . '.' . $ext;
+        if (file_put_contents("{$uploadsDir}/{$filename}", $decoded) === false) {
+            jsonResponse(['ok' => false, 'error' => 'Image could not be saved.'], 500);
+        }
+        jsonResponse(['ok' => true, 'url' => "/uploads/{$filename}"]);
     }
 
     // Toggle project visibility (Hide/Show on site)
