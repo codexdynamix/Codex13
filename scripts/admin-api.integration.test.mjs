@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const apiRouter = path.join(projectRoot, 'artifacts/codex-dynamics/public/api/index.php');
-const dbModule = path.join(projectRoot, 'artifacts/codex-dynamics/public/api/db.php');
+const dbModule = path.join(projectRoot, 'artifacts/codex-dynamics/public/api/lib/db.php');
 const superAdminToken = 'api-test-super-admin-token';
 const teamLeaderToken = 'api-test-team-leader-token';
 const clientAlphaToken = 'api-test-client-alpha-token';

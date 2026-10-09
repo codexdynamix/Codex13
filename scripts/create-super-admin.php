@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') exit(1);
-require_once __DIR__ . '/../artifacts/codex-dynamics/public/api/db.php';
+require_once __DIR__ . '/../artifacts/codex-dynamics/public/api/lib/db.php';
 
 [$script, $email, $name] = array_pad($argv, 3, '');
 $email = strtolower(trim($email));

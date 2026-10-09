@@ -91,7 +91,7 @@ function getDb(): PDO {
     $dbPass = getenv('DB_PASS') ?: '';
 
     // Check optional custom config file
-    $configFile = __DIR__ . '/config.php';
+    $configFile = dirname(__DIR__) . '/config.php';
     if (file_exists($configFile)) {
         $cfg = require $configFile;
         if (!empty($cfg['db_host'])) $dbHost = $cfg['db_host'];
@@ -129,7 +129,7 @@ function getDb(): PDO {
         ]);
     } else {
         // Local development fallback. Production must use a configured persistent database.
-        $dataDir = dirname(__DIR__, 2) . '/data';
+        $dataDir = dirname(__DIR__, 3) . '/data';
         if (!is_dir($dataDir)) {
             @mkdir($dataDir, 0755, true);
         }
@@ -142,8 +142,23 @@ function getDb(): PDO {
         $pdo->exec('PRAGMA foreign_keys = ON;');
     }
 
-    initSchema($pdo);
+    ensureSchemaCurrent($pdo);
     return $pdo;
+}
+
+/**
+ * Runs initSchema() only when this file (the schema definition) has changed since
+ * the last successful run, instead of on every request.
+ */
+function ensureSchemaCurrent(PDO $pdo): void {
+    $version = hash_file('sha256', __FILE__) ?: 'unknown';
+    $pdo->exec('CREATE TABLE IF NOT EXISTS schema_state (id VARCHAR(32) PRIMARY KEY, version VARCHAR(64) NOT NULL, applied_at VARCHAR(40) NOT NULL)');
+    $stmt = $pdo->prepare("SELECT version FROM schema_state WHERE id = 'schema'");
+    $stmt->execute();
+    if ($stmt->fetchColumn() === $version) return;
+    initSchema($pdo);
+    $pdo->prepare("DELETE FROM schema_state WHERE id = 'schema'")->execute();
+    $pdo->prepare("INSERT INTO schema_state (id, version, applied_at) VALUES ('schema', ?, ?)")->execute([$version, date('c')]);
 }
 
 function ensureDatabaseColumn(PDO $pdo, string $table, string $column, string $definition): void {
