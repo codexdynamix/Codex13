@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext } from "react";
 import type { PreviewPage } from "@/lib/theme-engine";
 

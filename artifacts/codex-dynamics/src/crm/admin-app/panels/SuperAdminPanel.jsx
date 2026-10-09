@@ -157,7 +157,7 @@ function AllLeadsTable({ data, currentUser, setData, setLeadAssignment, showNoti
     }
     let officeId = bulkOfficeId || null;
     let teamId = bulkTeamId || null;
-    let teamLeaderId = bulkTeamLeaderId || null;
+    const teamLeaderId = bulkTeamLeaderId || null;
     let agentId = bulkAgentId || null;
     const previousLeads = data.leads;
     const previousSelection = [...selected];

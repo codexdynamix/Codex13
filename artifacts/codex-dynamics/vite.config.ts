@@ -7,6 +7,7 @@ import { crmApiPlugin } from './src/server/crmApiPlugin';
 
 const port = Number(process.env.PORT) || 3000;
 const basePath = process.env.BASE_PATH || '/';
+const apiProxyTarget = process.env.API_PROXY_TARGET || 'http://127.0.0.1:8080';
 
 export default defineConfig({
   base: basePath,
@@ -34,6 +35,9 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    proxy: {
+      '/api': { target: apiProxyTarget, changeOrigin: false },
     },
   },
   preview: {

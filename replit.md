@@ -17,7 +17,8 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - In-app mail uses the PHP IMAP extension plus the configured IMAP/SMTP hosts and ports (Hostinger defaults: IMAP SSL 993, SMTP SSL 465). Configure each client mailbox in the Super Admin profile and verify it with that mailbox before relying on mail delivery.
 - Accounting records are persistent invoices, payments, and receipt numbers. Invoice line items can be categorized as project creation, hosting, domain, maintenance, or other; drafts are hidden from the client portal.
 - The Super Admin Accounting workspace and the Accounting section in each client profile use the same invoice, payment, and recurring-service records. The workspace summarizes monthly activity, open and overdue balances, and scheduled monthly-equivalent service amounts; all totals stay grouped by currency.
-- Frontend typecheck: `pnpm --filter @workspace/codex-dynamics run typecheck`
+- Frontend typecheck: `npm run typecheck`; lint: `npm run lint`; PHP integration tests: `npm run test:api`
+- Local dev outside Replit: run `npm run dev --workspace=@workspace/api-server` (PHP on :8080) and `npm run dev`; Vite proxies `/api` to `API_PROXY_TARGET` (default `http://127.0.0.1:8080`).
 - PHP syntax checks: `php -l artifacts/codex-dynamics/public/api/index.php` and `php -l artifacts/codex-dynamics/public/api/db.php`
 
 ## Stack
@@ -33,7 +34,8 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - `artifacts/codex-dynamics/public/api/index.php` — PHP API router
 - `artifacts/codex-dynamics/public/api/db.php` — PDO connection, SQLite schema, and initial database seeding
 - `artifacts/codex-dynamics/data/codex.sqlite` — local SQLite database used by the PHP API
-- `artifacts/api-server/` — Replit API service wrapper that launches the PHP API router
+- `artifacts/api-server/` — Replit API service wrapper (package.json scripts only) that launches the PHP API router
+- `scripts/admin-api.integration.test.mjs` — PHP API integration tests (isolated temp SQLite per run)
 
 ## Gotchas
 

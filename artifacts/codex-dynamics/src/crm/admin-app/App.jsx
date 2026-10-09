@@ -116,7 +116,6 @@ function normalizeCrmText(value) {
 function useCrmTextNormalization() {
   useEffect(() => {
     let scheduled = false;
-    let observer;
 
     const normalize = () => {
       const root = document.querySelector('.crm-admin-app');
@@ -153,7 +152,7 @@ function useCrmTextNormalization() {
       });
     };
 
-    observer = new MutationObserver(() => {
+    const observer = new MutationObserver(() => {
       if (scheduled) return;
       scheduled = true;
       window.requestAnimationFrame(() => {

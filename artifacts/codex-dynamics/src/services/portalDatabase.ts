@@ -984,7 +984,7 @@ function fromApiRow(row: any): any {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
   const normalized = Object.fromEntries(Object.entries(row).map(([key, rawValue]) => {
     let value = rawValue;
-    if (typeof value === 'string' && /^[\[{]/.test(value.trim())) {
+    if (typeof value === 'string' && /^[[{]/.test(value.trim())) {
       try { value = JSON.parse(value); } catch { /* keep plain text */ }
     }
     if (Array.isArray(value)) value = value.map(fromApiRow);

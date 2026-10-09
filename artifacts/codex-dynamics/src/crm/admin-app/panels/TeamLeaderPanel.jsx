@@ -645,7 +645,7 @@ function TeamLeaderPanel({ data, setData, currentUser, createAgent, canCreateAge
   };
 
   const getFilteredAgents = () => {
-    let filtered = agentStats.filter(agent => {
+    const filtered = agentStats.filter(agent => {
       // Search filter
       if (agentSearchQuery) {
         const query = agentSearchQuery.toLowerCase();
