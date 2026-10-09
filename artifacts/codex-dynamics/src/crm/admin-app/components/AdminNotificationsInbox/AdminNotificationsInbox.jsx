@@ -6,7 +6,7 @@ import {
   deleteAdminNotificationApi,
   clearAdminNotificationsApi,
 } from '../../adminApi';
-import ConfirmModal from '../ConfirmModal';
+import ConfirmModal from '../ConfirmModal/ConfirmModal';
 
 export default function AdminNotificationsInbox({ pollMs = 30000 }) {
   const [rows, setRows] = useState([]);
