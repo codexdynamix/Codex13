@@ -31,8 +31,4 @@ export default tseslint.config(
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
-  {
-    files: ['artifacts/codex-dynamics/src/server/**/*.ts'],
-    languageOptions: { globals: { ...globals.node } },
-  },
 );

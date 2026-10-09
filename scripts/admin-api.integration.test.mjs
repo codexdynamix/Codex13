@@ -788,3 +788,47 @@ test('Hostinger mail access is client-scoped and integration responses redact th
     );
   });
 });
+test('audit log routes require a Super Admin and support entry deletion', async () => {
+  const anonymous = await requestJson('/api/admin/audit');
+  assert.equal(anonymous.response.status, 401);
+  const teamLeader = await requestJson('/api/admin/audit', { token: teamLeaderToken });
+  assert.equal(teamLeader.response.status, 403);
+  const superAdmin = await requestJson('/api/admin/audit', { token: superAdminToken });
+  assert.equal(superAdmin.response.status, 200);
+  assert.ok(Array.isArray(superAdmin.data.log));
+
+  const missing = await requestJson('/api/admin/audit/does-not-exist', { token: superAdminToken, method: 'DELETE' });
+  assert.equal(missing.response.status, 404);
+  const tlDelete = await requestJson('/api/admin/audit/does-not-exist', { token: teamLeaderToken, method: 'DELETE' });
+  assert.equal(tlDelete.response.status, 403);
+});
+
+test('per-client notification inbox can be listed, pruned, and cleared by authorised staff', async () => {
+  for (const message of ['First notice', 'Second notice']) {
+    const sent = await requestJson('/api/admin/notifications/send', {
+      token: superAdminToken, method: 'POST', body: { user_id: 'lead_direct', message },
+    });
+    assert.equal(sent.response.status, 200, JSON.stringify(sent.data));
+  }
+
+  const listed = await requestJson('/api/admin/users/lead_direct/notifications', { token: teamLeaderToken });
+  assert.equal(listed.response.status, 200, JSON.stringify(listed.data));
+  const direct = listed.data.notifications.filter((row) => row.user_id === 'lead_direct');
+  assert.equal(direct.length, 2);
+  assert.ok(direct.every((row) => typeof row.message === 'string' && row.is_broadcast === 0));
+
+  const outside = await requestJson('/api/admin/users/lead_other/notifications', { token: teamLeaderToken });
+  assert.ok([403, 404].includes(outside.response.status));
+
+  const pruned = await requestJson('/api/admin/users/lead_direct/notifications/delete', {
+    token: teamLeaderToken, method: 'POST', body: { ids: [direct[0].id] },
+  });
+  assert.equal(pruned.response.status, 200);
+  assert.equal(pruned.data.deleted, 1);
+
+  const tlClear = await requestJson('/api/admin/users/lead_direct/notifications/clear', { token: teamLeaderToken, method: 'DELETE' });
+  assert.equal(tlClear.response.status, 403);
+  const cleared = await requestJson('/api/admin/users/lead_direct/notifications/clear', { token: superAdminToken, method: 'DELETE' });
+  assert.equal(cleared.response.status, 200);
+  assert.equal(cleared.data.deleted, 1);
+});

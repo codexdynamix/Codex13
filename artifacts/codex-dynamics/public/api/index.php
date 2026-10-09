@@ -2331,6 +2331,48 @@ if (preg_match('#^/admin/notifications/([^/]+)(?:/(read))?$#', $apiPath, $notifi
     }
 }
 
+if (preg_match('#^/admin/users/([^/]+)/notifications(?:/(clear|delete))?$#', $apiPath, $userNotificationMatch)) {
+    $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
+    $clientId = rawurldecode($userNotificationMatch[1]);
+    $action = $userNotificationMatch[2] ?? '';
+    requireVisibleLead($pdo, $actor, $clientId);
+    if ($action === '' && $method === 'GET') {
+        $stmt = $pdo->prepare("
+            SELECT n.id, n.user_id, n.title, n.description, n.description AS message, n.kind, n.type, n.link, n.sent_by, n.created_at,
+                   r.read_at,
+                   CASE WHEN r.notification_id IS NOT NULL THEN 1 ELSE n.is_read END AS is_read,
+                   CASE WHEN n.user_id IS NULL OR n.user_id = '' THEN 1 ELSE 0 END AS is_broadcast
+            FROM notifications n
+            LEFT JOIN user_notification_reads r ON r.notification_id = n.id AND r.user_id = ?
+            WHERE n.user_id = ? OR n.user_id IS NULL OR n.user_id = ''
+            ORDER BY n.created_at DESC LIMIT 200
+        ");
+        $stmt->execute([$clientId, $clientId]);
+        $rows = $stmt->fetchAll();
+        jsonResponse(['ok' => true, 'notifications' => $rows, 'total' => count($rows)]);
+    }
+    if ($action === 'delete' && $method === 'POST') {
+        $ids = array_values(array_unique(array_filter(array_map(
+            static fn($id) => trim((string)$id),
+            is_array($input['ids'] ?? null) ? $input['ids'] : []
+        ))));
+        if (count($ids) === 0 || count($ids) > 500) jsonResponse(['ok' => false, 'error' => 'Select between 1 and 500 notifications.'], 400);
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND id IN ({$placeholders})");
+        $stmt->execute(array_merge([$clientId], $ids));
+        jsonResponse(['ok' => true, 'deleted' => $stmt->rowCount()]);
+    }
+    if ($action === 'clear' && $method === 'DELETE') {
+        requireSuperAdmin($pdo, $adminSession);
+        $stmt = $pdo->prepare('DELETE FROM notifications WHERE user_id = ?');
+        $stmt->execute([$clientId]);
+        $deleted = $stmt->rowCount();
+        $pdo->prepare('DELETE FROM user_notification_reads WHERE user_id = ?')->execute([$clientId]);
+        jsonResponse(['ok' => true, 'deleted' => $deleted]);
+    }
+    jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+}
+
 if ($apiPath === '/admin/notifications/send') {
     $actor = requireAdminCapability($pdo, $adminSession, 'notifications');
     $userId = $input['user_id'] ?? null;
@@ -2676,15 +2718,53 @@ if (preg_match('#^/admin/messages/([^/]+)$#', $apiPath, $messageMatch) && $metho
 // -----------------------------------------------------------------------------
 // 8. CLIENT ACTIVITY / AUDIT LOG
 // -----------------------------------------------------------------------------
-if ($apiPath === '/admin/audit' || preg_match('#^/admin/users/([^/]+)/profile-history#', $apiPath, $m)) {
-    $userId = $m[1] ?? ($_GET['user_id'] ?? null);
-    if ($userId) {
-        $stmt = $pdo->prepare("SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 50");
+if ($apiPath === '/admin/audit') {
+    requireSuperAdmin($pdo, $adminSession);
+    if ($method === 'DELETE') {
+        $deleted = $pdo->exec('DELETE FROM audit_logs');
+        jsonResponse(['ok' => true, 'deleted' => (int)$deleted]);
+    }
+    if ($method !== 'GET') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $userId = trim((string)($_GET['user_id'] ?? ''));
+    if ($userId !== '') {
+        $stmt = $pdo->prepare('SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 50');
         $stmt->execute([$userId]);
         $rows = $stmt->fetchAll();
     } else {
-        $rows = $pdo->query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100")->fetchAll();
+        $rows = $pdo->query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100')->fetchAll();
     }
+    jsonResponse(['ok' => true, 'log' => $rows, 'history' => $rows, 'total' => count($rows)]);
+}
+
+if (preg_match('#^/admin/audit/([^/]+)$#', $apiPath, $auditMatch)) {
+    requireSuperAdmin($pdo, $adminSession);
+    if ($method !== 'DELETE') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    $stmt = $pdo->prepare('DELETE FROM audit_logs WHERE id = ?');
+    $stmt->execute([rawurldecode($auditMatch[1])]);
+    if ($stmt->rowCount() === 0) jsonResponse(['ok' => false, 'error' => 'Audit entry not found.'], 404);
+    jsonResponse(['ok' => true, 'deleted' => 1]);
+}
+
+if (preg_match('#^/admin/users/([^/]+)/profile-history(?:/([^/]+))?$#', $apiPath, $historyMatch)) {
+    $userId = rawurldecode($historyMatch[1]);
+    $entryId = isset($historyMatch[2]) ? rawurldecode($historyMatch[2]) : '';
+    if ($method === 'DELETE') {
+        requireSuperAdmin($pdo, $adminSession);
+        if ($entryId !== '') {
+            $stmt = $pdo->prepare('DELETE FROM audit_logs WHERE id = ? AND user_id = ?');
+            $stmt->execute([$entryId, $userId]);
+            if ($stmt->rowCount() === 0) jsonResponse(['ok' => false, 'error' => 'History entry not found.'], 404);
+            jsonResponse(['ok' => true, 'deleted' => 1]);
+        }
+        $stmt = $pdo->prepare('DELETE FROM audit_logs WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        jsonResponse(['ok' => true, 'deleted' => $stmt->rowCount()]);
+    }
+    if ($method !== 'GET' || $entryId !== '') jsonResponse(['ok' => false, 'error' => 'Method not allowed.'], 405);
+    requireActiveAdminStaff($pdo, $adminSession);
+    $stmt = $pdo->prepare('SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 50');
+    $stmt->execute([$userId]);
+    $rows = $stmt->fetchAll();
     jsonResponse(['ok' => true, 'log' => $rows, 'history' => $rows, 'total' => count($rows)]);
 }
 
