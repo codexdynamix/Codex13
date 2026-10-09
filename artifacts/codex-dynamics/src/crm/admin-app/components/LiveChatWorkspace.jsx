@@ -28,224 +28,12 @@ import {
   getAdminChatThreads,
   getAdminMessages,
   getStoredAdminProfile,
-  importLegacyAdminChatThreads,
   markAdminMessagesRead,
   sendAdminMessage,
   saveAdminChatThreadMeta,
 } from '../adminApi';
 
-const CHAT_STORAGE_KEY = 'codex_crm_chat_threads_v3';
 
-const LEGACY_DEMO_THREADS = [
-  {
-    id: 'th_101',
-    visitor_name: 'Marcus Sterling',
-    visitor_email: 'm.sterling@enterprise-tech.io',
-    location: 'London, United Kingdom',
-    browser: 'Chrome 122 · macOS Sonoma',
-    ip_address: '82.165.197.12',
-    channel: 'Tidio Live Chat',
-    status: 'active',
-    is_archived: false,
-    unread_count: 1,
-    assigned_agent: 'Alex Morgan',
-    notes: 'Interested in a React/Node enterprise architecture migration with bespoke CRM integration.',
-    created_at: new Date(Date.now() - 3600_000 * 2).toISOString(),
-    messages: [
-      {
-        id: 'm_1',
-        sender: 'system',
-        text: 'Marcus Sterling started conversation via Tidio live chat',
-        created_at: new Date(Date.now() - 3600_000 * 2).toISOString(),
-      },
-      {
-        id: 'm_2',
-        sender: 'visitor',
-        sender_name: 'Marcus Sterling',
-        text: 'Hi there, we are looking to overhaul our internal CRM and web portal. Do you support bespoke integration with existing SQL databases?',
-        created_at: new Date(Date.now() - 3600_000 * 1.8).toISOString(),
-      },
-      {
-        id: 'm_3',
-        sender: 'agent',
-        sender_name: 'Alex Morgan',
-        text: 'Hello Marcus! Yes, absolutely. We architect custom React frontends with high-throughput backend services and direct integrations to legacy or cloud SQL databases.',
-        created_at: new Date(Date.now() - 3600_000 * 1.5).toISOString(),
-      },
-      {
-        id: 'm_4',
-        sender: 'visitor',
-        sender_name: 'Marcus Sterling',
-        text: 'Brilliant. What would be the typical timeline for an initial architectural review and prototype?',
-        created_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-      },
-      {
-        id: 'm_5',
-        sender: 'agent',
-        sender_name: 'Alex Morgan',
-        text: 'Typically we deliver the foundational blueprint, schema mapping, and interactive prototype within 10 to 14 business days.',
-        created_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'th_102',
-    visitor_name: 'Elena Rostova',
-    visitor_email: 'elena@novadesign.studio',
-    location: 'Berlin, Germany',
-    browser: 'Safari 17 · iOS 17.4',
-    ip_address: '178.62.204.45',
-    channel: 'Tidio Live Chat',
-    status: 'waiting',
-    is_archived: false,
-    unread_count: 2,
-    assigned_agent: 'Unassigned',
-    notes: 'Asking about fixed-price packages vs monthly engineering retainer.',
-    created_at: new Date(Date.now() - 3600_000 * 5).toISOString(),
-    messages: [
-      {
-        id: 'm_201',
-        sender: 'system',
-        text: 'Elena Rostova initiated conversation',
-        created_at: new Date(Date.now() - 3600_000 * 5).toISOString(),
-      },
-      {
-        id: 'm_202',
-        sender: 'visitor',
-        sender_name: 'Elena Rostova',
-        text: 'Hi Codex team! Are your retainer hours rollover-friendly if we have slower development sprints?',
-        created_at: new Date(Date.now() - 3600_000 * 4.9).toISOString(),
-      },
-      {
-        id: 'm_203',
-        sender: 'visitor',
-        sender_name: 'Elena Rostova',
-        text: 'Also curious if you provide dedicated technical lead support throughout the retainer.',
-        created_at: new Date(Date.now() - 3600_000 * 4.8).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'th_103',
-    visitor_name: 'Visitor #4829',
-    visitor_email: 'visitor4829@network.ca',
-    location: 'Toronto, Canada',
-    browser: 'Firefox 124 · Windows 11',
-    ip_address: '142.250.190.78',
-    channel: 'Website Visitor',
-    status: 'active',
-    is_archived: false,
-    unread_count: 0,
-    assigned_agent: 'Alex Morgan',
-    notes: 'Inquired about technical article samples and code repository access.',
-    created_at: new Date(Date.now() - 86400_000 * 2).toISOString(),
-    messages: [
-      {
-        id: 'm_301',
-        sender: 'visitor',
-        sender_name: 'Visitor #4829',
-        text: 'Great article on high-throughput React architecture! Is the example GitHub repo public?',
-        created_at: new Date(Date.now() - 86400_000 * 2).toISOString(),
-      },
-      {
-        id: 'm_302',
-        sender: 'agent',
-        sender_name: 'Alex Morgan',
-        text: 'Glad you enjoyed it! Yes, you can check our public GitHub showcases under CodexDynamics/architecture-samples.',
-        created_at: new Date(Date.now() - 86400_000 * 1.9).toISOString(),
-      },
-      {
-        id: 'm_303',
-        sender: 'visitor',
-        sender_name: 'Visitor #4829',
-        text: 'Found it, thank you!',
-        created_at: new Date(Date.now() - 86400_000 * 1.8).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'th_104',
-    visitor_name: 'David Chen',
-    visitor_email: 'd.chen@apex-analytics.com',
-    location: 'San Francisco, CA, USA',
-    browser: 'Chrome 123 · macOS Sonoma',
-    ip_address: '192.0.2.89',
-    channel: 'Tidio Live Chat',
-    status: 'waiting',
-    is_archived: false,
-    unread_count: 1,
-    assigned_agent: 'Alex Morgan',
-    notes: 'Needs multi-tenant database partitioning and custom dashboards.',
-    created_at: new Date(Date.now() - 3600_000 * 8).toISOString(),
-    messages: [
-      {
-        id: 'm_401',
-        sender: 'visitor',
-        sender_name: 'David Chen',
-        text: 'Do you have capacity to begin onboarding a new high-security SaaS project next month?',
-        created_at: new Date(Date.now() - 3600_000 * 8).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'th_105',
-    visitor_name: 'Sarah Jenkins',
-    visitor_email: 'sarah.j@fintechlabs.co.uk',
-    location: 'Edinburgh, UK',
-    browser: 'Edge 122 · Windows 11',
-    ip_address: '198.51.100.44',
-    channel: 'Tidio Live Chat',
-    status: 'active',
-    is_archived: false,
-    unread_count: 0,
-    assigned_agent: 'Alex Morgan',
-    notes: 'Fintech compliance and SOC2 requirements.',
-    created_at: new Date(Date.now() - 86400_000 * 1.2).toISOString(),
-    messages: [
-      {
-        id: 'm_501',
-        sender: 'visitor',
-        sender_name: 'Sarah Jenkins',
-        text: 'Hello Alex, following up on the security checklist you provided. All looks aligned with our compliance team.',
-        created_at: new Date(Date.now() - 3600_000 * 12).toISOString(),
-      },
-      {
-        id: 'm_502',
-        sender: 'agent',
-        sender_name: 'Alex Morgan',
-        text: 'Fantastic to hear, Sarah. I will prepare the formal Master Services Agreement for your review.',
-        created_at: new Date(Date.now() - 3600_000 * 11).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'th_106',
-    visitor_name: 'Liam O’Connor',
-    visitor_email: 'liam@dublin-ventures.ie',
-    location: 'Dublin, Ireland',
-    browser: 'Safari 17 · macOS Ventura',
-    ip_address: '203.0.113.19',
-    channel: 'Tidio Live Chat',
-    status: 'active',
-    is_archived: false,
-    unread_count: 0,
-    assigned_agent: 'Alex Morgan',
-    notes: 'API integration audit completed.',
-    created_at: new Date(Date.now() - 86400_000 * 4).toISOString(),
-    messages: [
-      {
-        id: 'm_601',
-        sender: 'visitor',
-        sender_name: 'Liam O’Connor',
-        text: 'Thanks for the quick audit report, Alex. The recommendations solved our webhook latency.',
-        created_at: new Date(Date.now() - 86400_000 * 4).toISOString(),
-      },
-    ],
-  },
-];
-
-const INITIAL_THREADS = [];
-const DEMO_THREAD_IDS = new Set(LEGACY_DEMO_THREADS.map((thread) => thread.id));
 
 export default function LiveChatWorkspace({ showNotification = () => {} }) {
   const [threads, setThreads] = useState([]);
@@ -281,24 +69,6 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
     try {
       const profile = getStoredAdminProfile();
       setCurrentAdmin(profile);
-      const migrationKey = 'codex_crm_chat_imported_v1';
-      if (profile?.role === 'Super Admin' && !localStorage.getItem(migrationKey)) {
-        const raw = localStorage.getItem(CHAT_STORAGE_KEY);
-        if (raw) {
-          const legacyThreads = JSON.parse(raw);
-          if (!Array.isArray(legacyThreads)) throw new Error('The saved chat backup is not a conversation list.');
-          const migration = legacyThreads.filter((thread) => !DEMO_THREAD_IDS.has(thread.id));
-          if (migration.length) {
-            const result = await importLegacyAdminChatThreads(migration);
-            if (!(result.skipped || []).length) localStorage.setItem(migrationKey, '1');
-            else setChatError(`${result.skipped.length} older conversations need identity review before they can be imported.`);
-          } else {
-            localStorage.setItem(migrationKey, '1');
-          }
-        } else {
-          localStorage.setItem(migrationKey, '1');
-        }
-      }
       const result = await getAdminChatThreads({ includeArchived: true });
       setThreads((previous) => {
         const previousById = new Map(previous.map((thread) => [thread.id, thread]));
@@ -334,9 +104,8 @@ export default function LiveChatWorkspace({ showNotification = () => {} }) {
   // Read Tidio config from site settings if present
   const tidioInfo = useMemo(() => {
     try {
-      const draft = localStorage.getItem('site_editor_draft_config');
       const live = localStorage.getItem('codex_site_config');
-      const config = draft ? JSON.parse(draft) : live ? JSON.parse(live) : {};
+      const config = live ? JSON.parse(live) : {};
       const tidio = config.tidio || {};
       return {
         enabled: Boolean(tidio.enabled),

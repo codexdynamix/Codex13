@@ -1,6 +1,7 @@
 // CRM Theme & Appearance State Manager
 
 import { COLOR_PALETTES, generateRandomHarmoniousPalette } from '../SiteSettings/ThemeAndPalettePresets';
+import { saveSettingsToApi } from '../../../platformDefaults';
 
 export { COLOR_PALETTES };
 
@@ -424,13 +425,29 @@ export function applyCrmThemeToDom(settings = getCrmThemeSettings()) {
   root.style.setProperty('--bg-input', inputBg);
 }
 
-export function saveCrmThemeSettings(newSettings) {
-  if (typeof window === 'undefined') return;
-  const merged = { ...getCrmThemeSettings(), ...newSettings, glassEffect: false };
+// The CRM theme is stored in platform settings (`settings.crmTheme`). The
+// localStorage copy is only a first-paint cache of the server value.
+export async function loadCrmThemeFromServer() {
+  const response = await fetch('/api/crm/settings', { headers: { Accept: 'application/json' } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) throw new Error(data?.error || 'CRM theme could not be loaded.');
+  const serverTheme = data?.settings?.crmTheme;
+  if (!serverTheme || typeof serverTheme !== 'object') return getCrmThemeSettings();
+  return cacheAndApplyCrmTheme({ ...DEFAULT_CRM_SETTINGS, ...serverTheme, glassEffect: false });
+}
+
+function cacheAndApplyCrmTheme(merged) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
   } catch (_) {}
   applyCrmThemeToDom(merged);
   window.dispatchEvent(new CustomEvent('cdx:crm-theme-changed', { detail: merged }));
   return merged;
+}
+
+export async function saveCrmThemeSettings(newSettings) {
+  if (typeof window === 'undefined') return undefined;
+  const merged = { ...getCrmThemeSettings(), ...newSettings, glassEffect: false };
+  await saveSettingsToApi({ crmTheme: merged });
+  return cacheAndApplyCrmTheme(merged);
 }

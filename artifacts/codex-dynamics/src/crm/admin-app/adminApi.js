@@ -272,13 +272,6 @@ export async function saveAdminChatThreadMeta(clientId, updates) {
   });
 }
 
-export async function importLegacyAdminChatThreads(threads) {
-  return adminFetch('/api/admin/messages/threads/import', {
-    method: 'POST',
-    body: { threads },
-  });
-}
-
 export async function getStaffNotesAdmin(staffId) {
   if (!staffId) return [];
   const data = await adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes`);
@@ -290,14 +283,6 @@ export async function addStaffNoteAdmin(staffId, text) {
   return adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes`, {
     method: 'POST',
     body: { text },
-  });
-}
-
-export async function importLegacyStaffNotesAdmin(staffId, notes) {
-  if (!staffId) throw new Error('staff_id required');
-  return adminFetch(`/api/admin/staff/${encodeURIComponent(staffId)}/notes/import`, {
-    method: 'POST',
-    body: { notes },
   });
 }
 
@@ -354,13 +339,6 @@ export async function addAdminBlogCategory(name) {
   return adminFetch('/api/admin/blog/categories', {
     method: 'POST',
     body: { name },
-  });
-}
-
-export async function importLegacyAdminBlogCategories(categories) {
-  return adminFetch('/api/admin/blog/categories', {
-    method: 'POST',
-    body: { categories },
   });
 }
 

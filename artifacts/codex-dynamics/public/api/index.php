@@ -2011,7 +2011,7 @@ if ($apiPath === '/admin/settings') {
         'registrationEnabled', 'twoFactorAuthEnabled',
         'sessionTimeoutMinutes', 'maxFailedLoginAttempts',
         'primaryColor', 'secondaryColor', 'accentColor',
-        'buttonColor', 'backgroundColor', 'textColor', 'customThemes',
+        'buttonColor', 'backgroundColor', 'textColor', 'customThemes', 'crmTheme',
     ];
     foreach ($settings as $key => $value) {
         if (!in_array($key, $allowedSettings, true)) {
@@ -2029,9 +2029,12 @@ if ($apiPath === '/admin/settings') {
         if ($key === 'customThemes' && !is_array($value)) {
             jsonResponse(['ok' => false, 'error' => 'Custom themes must be an array.'], 400);
         }
+        if ($key === 'crmTheme' && (!is_array($value) || strlen((string)json_encode($value)) > 10000)) {
+            jsonResponse(['ok' => false, 'error' => 'CRM theme must be an object under 10,000 characters.'], 400);
+        }
         if (!in_array($key, [
             'registrationEnabled', 'twoFactorAuthEnabled',
-            'sessionTimeoutMinutes', 'maxFailedLoginAttempts', 'customThemes',
+            'sessionTimeoutMinutes', 'maxFailedLoginAttempts', 'customThemes', 'crmTheme',
         ], true) && (!is_string($value) || strlen($value) > 10000)) {
             jsonResponse(['ok' => false, 'error' => "{$key} must be a string under 10,000 characters."], 400);
         }

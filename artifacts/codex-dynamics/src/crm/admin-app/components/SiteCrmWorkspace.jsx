@@ -27,9 +27,6 @@ const emptyForms = {
   project: { title: '', site_name: '', site_url: '', description: '', category: 'Web Development', image_url: '', is_published: true },
 };
 
-const SITE_CRM_STORAGE_KEY = 'codex_site_crm_content';
-const SITE_CRM_MIGRATION_KEY = 'codex_site_crm_content_imported_v1';
-
 async function crmAction(action, payload = {}) {
   if (action === 'restore_backup') {
     return importLegacySiteContentAdmin(payload.backupData || {});
@@ -106,23 +103,6 @@ export default function SiteCrmWorkspace({
     setLoading(true);
     setLoadError('');
     try {
-      const legacyRaw = window.localStorage.getItem(SITE_CRM_STORAGE_KEY);
-      if (legacyRaw && window.localStorage.getItem(SITE_CRM_MIGRATION_KEY) !== '1') {
-        const legacy = JSON.parse(legacyRaw);
-        const result = await importLegacySiteContentAdmin({
-          blogs: legacy.blogs || [],
-          reviews: legacy.reviews || [],
-          projects: legacy.projects || [],
-          backlinks: legacy.backlinks || [],
-          enquiries: legacy.enquiries || [],
-        });
-        if (Number(result?.skipped || 0) === 0) {
-          window.localStorage.setItem(SITE_CRM_MIGRATION_KEY, '1');
-          window.localStorage.removeItem(SITE_CRM_STORAGE_KEY);
-        } else {
-          showNotification(`${result.imported || 0} old Site CRM records were saved. ${result.skipped} need review; their browser backup was kept.`);
-        }
-      }
       const profile = getStoredAdminProfile();
       setIsSuperAdmin(profile?.role === 'Super Admin');
       const [content, clientResult] = await Promise.all([
