@@ -662,7 +662,7 @@ if ($apiPath === '/admin/login' && $method === 'POST') {
     $stmt->execute([$email]);
     $staff = $stmt->fetch();
 
-    $validPassword = $staff && (password_verify($password, $staff['password']) || hash_equals((string)$staff['password'], (string)$password));
+    $validPassword = $staff && (password_verify($password, (string)$staff['password']));
     if (!$validPassword) {
         jsonResponse(['ok' => false, 'error' => 'Invalid staff email or password.'], 401);
     }

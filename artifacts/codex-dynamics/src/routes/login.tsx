@@ -39,9 +39,9 @@ function LoginRouteComponent() {
           createdAt: new Date().toISOString(),
         };
 
-        localStorage.setItem("cdx_portal_session_token_v2", token);
+        localStorage.setItem("cdx_portal_session_token_v2", "cookie-session");
         localStorage.setItem("cdx_portal_session_client_v2", JSON.stringify(portalClient));
-        localStorage.setItem("codex_client_token", token);
+        localStorage.setItem("codex_client_token", "cookie-session");
         localStorage.setItem("codex_client_user", JSON.stringify(portalClient));
         sessionStorage.removeItem("cdx_portal_logged_out");
         sessionStorage.setItem("codex_impersonating_admin", "true");

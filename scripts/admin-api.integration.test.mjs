@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import fs from 'node:fs';
 import { createServer } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
@@ -870,4 +871,28 @@ test('admin login sets an HttpOnly SameSite session cookie and logout clears it'
   assert.equal(logout.response.status, 200);
   const afterLogout = await requestJson('/api/admin/audit', { headers: { Cookie: cookie } });
   assert.equal(afterLogout.response.status, 401);
+});
+
+test('CRM content actions require a staff session', async () => {
+  for (const action of ['upload_image', 'delete_project', 'delete_blog', 'save_blog', 'toggle_project']) {
+    const { response } = await requestJson('/api/crm/action', { method: 'POST', body: { action, id: 1 } });
+    assert.equal(response.status, 401, action);
+  }
+});
+
+test('image upload only accepts real images and picks a safe file name', async () => {
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const fake = await requestJson('/api/crm/action', {
+    method: 'POST', token: superAdminToken,
+    body: { action: 'upload_image', name: 'shell.php', data: 'data:image/png;base64,' + Buffer.from('<?php echo 1;').toString('base64') },
+  });
+  assert.equal(fake.response.status, 400);
+
+  const real = await requestJson('/api/crm/action', {
+    method: 'POST', token: superAdminToken,
+    body: { action: 'upload_image', name: 'shell.php', data: 'data:image/png;base64,' + png },
+  });
+  assert.equal(real.response.status, 200, JSON.stringify(real.data));
+  assert.match(real.data.url, /^\/uploads\/\d+_[a-f0-9]{8}_shell\.png$/);
+  fs.rmSync(path.join(projectRoot, 'artifacts/codex-dynamics/public', real.data.url), { force: true });
 });
