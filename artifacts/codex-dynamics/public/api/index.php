@@ -56,18 +56,53 @@ if ($isClientLifecycleRoute) {
     }
 }
 
-function bearerToken(): string {
+const ADMIN_SESSION_COOKIE = 'cdx_admin_session';
+const PORTAL_SESSION_COOKIE = 'cdx_portal_session';
+
+function sessionCookieName(string $table): string {
+    return $table === 'admin_sessions' ? ADMIN_SESSION_COOKIE : PORTAL_SESSION_COOKIE;
+}
+
+function bearerToken(?string $cookieName = null): string {
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
     if (!$header && function_exists('getallheaders')) {
         $headers = getallheaders();
         $header = $headers['Authorization'] ?? $headers['authorization'] ?? '';
     }
-    return preg_match('/^Bearer\s+(\S+)$/i', $header, $matches) ? $matches[1] : '';
+    if (preg_match('/^Bearer\s+(\S+)$/i', $header, $matches)) return $matches[1];
+    if ($cookieName !== null && is_string($_COOKIE[$cookieName] ?? null)) return $_COOKIE[$cookieName];
+    return '';
+}
+
+function requestIsHttps(): bool {
+    return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+}
+
+function setSessionCookie(string $name, string $token, int $expiresAt): void {
+    setcookie($name, $token, [
+        'expires' => $expiresAt,
+        'path' => '/api',
+        'secure' => requestIsHttps(),
+        'httponly' => true,
+        'samesite' => 'Strict',
+    ]);
+}
+
+function clearSessionCookie(string $name): void {
+    setSessionCookie($name, '', time() - 3600);
 }
 
 function findSession(PDO $pdo, string $table, string $ownerColumn): ?array {
-    $token = bearerToken();
+    $cookieName = sessionCookieName($table);
+    $token = bearerToken($cookieName);
     if ($token === '') return null;
+    $usingCookie = ($_COOKIE[$cookieName] ?? null) === $token;
+    if ($usingCookie
+        && !in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET', 'HEAD', 'OPTIONS'], true)
+        && !requestOriginIsTrusted()) {
+        jsonResponse(['ok' => false, 'error' => 'Cross-site request rejected.'], 403);
+    }
     $columns = "{$ownerColumn} AS owner_id, token_hash";
     if ($table === 'portal_sessions') {
         $columns .= ', is_impersonating, admin_user_id';
@@ -866,7 +901,8 @@ if ($apiPath === '/healthz') {
 }
 
 if ($apiPath === '/portal/logout' && $method === 'POST') {
-    $token = bearerToken();
+    $token = bearerToken(PORTAL_SESSION_COOKIE);
+    clearSessionCookie(PORTAL_SESSION_COOKIE);
     $pdo->prepare('DELETE FROM portal_sessions WHERE token_hash = ?')
         ->execute([hash('sha256', $token)]);
     if (!empty($portalSession['impersonating'])) {
@@ -3996,7 +4032,8 @@ if ($apiPath === '/admin/me' && $method === 'GET') {
 }
 
 if ($apiPath === '/admin/logout' && $method === 'POST') {
-    $token = bearerToken();
+    $token = bearerToken(ADMIN_SESSION_COOKIE);
+    clearSessionCookie(ADMIN_SESSION_COOKIE);
     $pdo->prepare("DELETE FROM admin_sessions WHERE token_hash = ?")->execute([hash('sha256', $token)]);
     jsonResponse(['ok' => true]);
 }
@@ -4658,6 +4695,7 @@ if ($apiPath === '/admin/login' && $method === 'POST') {
     $pdo->prepare("INSERT INTO admin_sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)")
         ->execute([hash('sha256', $token), $staff['id'], date('c', time() + 86400 * 14), $now, $now]);
 
+    setSessionCookie(ADMIN_SESSION_COOKIE, $token, time() + 86400 * 14);
     jsonResponse([
         'ok' => true,
         'token' => $token,
@@ -4718,6 +4756,7 @@ if ($apiPath === '/portal/login' && $method === 'POST') {
     $pdo->prepare("INSERT INTO portal_sessions (token_hash, client_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
         ->execute([hash('sha256', $token), $client['id'], date('c', time() + 86400 * 14), $now]);
 
+    setSessionCookie(PORTAL_SESSION_COOKIE, $token, time() + 86400 * 14);
     jsonResponse([
         'ok' => true,
         'token' => $token,
@@ -4767,6 +4806,7 @@ if (preg_match('#^/admin/clients/([^/]+)/impersonate$#', $apiPath, $impersonatio
             $now,
         ]);
 
+    setSessionCookie(PORTAL_SESSION_COOKIE, $token, strtotime($expiresAt) ?: time() + 3600);
     jsonResponse([
         'ok' => true,
         'token' => $token,

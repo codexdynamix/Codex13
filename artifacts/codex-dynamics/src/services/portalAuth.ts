@@ -9,6 +9,12 @@ import { portalDb, type PortalClient } from './portalDatabase';
 
 const PORTAL_TOKEN_KEY = 'cdx_portal_session_token_v2';
 const PORTAL_USER_KEY = 'cdx_portal_session_client_v2';
+// The real session token lives in an HttpOnly cookie; storage only keeps this marker.
+export const PORTAL_COOKIE_SESSION_MARKER = 'cookie-session';
+
+export function portalAuthHeaders(token: string | null | undefined): Record<string, string> {
+  return token && token !== PORTAL_COOKIE_SESSION_MARKER ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export interface PortalSession {
   token: string;
@@ -86,10 +92,10 @@ export function setPortalSession(client: PortalClient, serverToken?: string): Po
 
   try {
     sessionStorage.removeItem('cdx_portal_logged_out');
-    localStorage.setItem(PORTAL_TOKEN_KEY, token);
+    localStorage.setItem(PORTAL_TOKEN_KEY, PORTAL_COOKIE_SESSION_MARKER);
     localStorage.setItem(PORTAL_USER_KEY, JSON.stringify(client));
     // Also sync with legacy keys for backwards-compatibility with old /client route
-    localStorage.setItem('codex_client_token', token);
+    localStorage.setItem('codex_client_token', PORTAL_COOKIE_SESSION_MARKER);
     localStorage.setItem('codex_client_user', JSON.stringify({
       id: client.id,
       name: client.name,
@@ -128,9 +134,9 @@ export function setPortalImpersonationSession(client: PortalClient, serverToken:
     sessionStorage.removeItem('cdx_portal_logged_out');
     sessionStorage.setItem('codex_impersonating_admin', 'true');
     sessionStorage.setItem('codex_impersonating_client_name', client.name || 'Client');
-    localStorage.setItem(PORTAL_TOKEN_KEY, serverToken);
+    localStorage.setItem(PORTAL_TOKEN_KEY, PORTAL_COOKIE_SESSION_MARKER);
     localStorage.setItem(PORTAL_USER_KEY, JSON.stringify(client));
-    localStorage.setItem('codex_client_token', serverToken);
+    localStorage.setItem('codex_client_token', PORTAL_COOKIE_SESSION_MARKER);
     localStorage.setItem('codex_client_user', JSON.stringify({
       id: client.id,
       name: client.name,
@@ -156,7 +162,7 @@ export function clearPortalSession(): void {
     if (token) {
       void fetch('/api/portal/logout', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: portalAuthHeaders(token),
         credentials: 'same-origin',
       }).catch(() => {});
     }

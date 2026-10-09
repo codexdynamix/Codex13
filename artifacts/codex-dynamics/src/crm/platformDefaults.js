@@ -112,7 +112,7 @@ function readAdminToken(token) {
 async function settingsRequest(path, { method = 'GET', body, token } = {}) {
   const headers = { Accept: 'application/json' };
   const adminToken = readAdminToken(token);
-  if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+  if (adminToken && adminToken !== 'cookie-session') headers.Authorization = `Bearer ${adminToken}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
   const response = await fetch(path, {

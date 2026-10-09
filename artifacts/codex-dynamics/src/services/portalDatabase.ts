@@ -312,7 +312,7 @@ function portalAuthorizationHeaders(): HeadersInit {
   const token = typeof window !== 'undefined' ? localStorage.getItem('cdx_portal_session_token_v2') : null;
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(token && token !== 'cookie-session' ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
 

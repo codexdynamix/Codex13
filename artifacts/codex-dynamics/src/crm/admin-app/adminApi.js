@@ -12,6 +12,8 @@
 import { portalDb } from '../../services/portalDatabase';
 
 const TOKEN_KEY   = 'codex_admin_token';
+// The real session token lives in an HttpOnly cookie; storage only keeps this marker.
+export const COOKIE_SESSION_MARKER = 'cookie-session';
 const PROFILE_KEY = 'codex_admin_profile';
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -35,8 +37,12 @@ export function getAdminToken() {
   try { return localStorage.getItem(TOKEN_KEY) || null; } catch { return null; }
 }
 
-function setAdminToken(token) {
-  try { localStorage.setItem(TOKEN_KEY, token); } catch {}
+function setAdminToken() {
+  try { localStorage.setItem(TOKEN_KEY, COOKIE_SESSION_MARKER); } catch {}
+}
+
+function authHeaders(token = getAdminToken()) {
+  return token && token !== COOKIE_SESSION_MARKER ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export function clearAdminToken() {
@@ -104,7 +110,7 @@ export async function adminLogin(email, password, requestedRole) {
   if (!res.ok || !data.ok || !data.user || !data.token) {
     throw new Error(data.error || 'Sign in failed. Please check your credentials and try again.');
   }
-  setAdminToken(data.token);
+  setAdminToken();
   setStoredAdminProfile(data.user);
   return data.user;
 }
@@ -121,7 +127,8 @@ export async function adminLogout() {
     if (token) {
       await fetch('/api/admin/logout', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders(token),
+        credentials: 'same-origin',
       });
     }
   } finally {
@@ -192,7 +199,7 @@ async function adminFetch(path, { method = 'GET', body } = {}) {
   const headers = {
     Accept: 'application/json',
   };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  Object.assign(headers, authHeaders(token));
   if (requestBody) headers['Content-Type'] = 'application/json';
 
   const res = await withTimeout(
@@ -240,7 +247,7 @@ export async function uploadAdminSiteImage(payload) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...authHeaders(token),
     },
     body: JSON.stringify({ action: 'upload_image', ...payload }),
   }), 30000);
@@ -501,7 +508,7 @@ function mapAdminMessage(m) {
 export async function getAdminMessageAttachmentUrl(messageId) {
   const token = getAdminToken();
   const res = await fetch(`/api/admin/messages/${encodeURIComponent(messageId)}/attachment`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: authHeaders(token),
     credentials: 'same-origin',
   });
   if (!res.ok) throw new Error('Could not load attachment.');

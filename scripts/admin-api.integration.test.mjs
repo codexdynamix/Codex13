@@ -832,3 +832,42 @@ test('per-client notification inbox can be listed, pruned, and cleared by author
   assert.equal(cleared.response.status, 200);
   assert.equal(cleared.data.deleted, 1);
 });
+
+test('admin session works from the HttpOnly cookie and rejects cross-site writes', async () => {
+  const cookie = `cdx_admin_session=${superAdminToken}`;
+  const viaCookie = await requestJson('/api/admin/audit', { headers: { Cookie: cookie } });
+  assert.equal(viaCookie.response.status, 200);
+
+  const crossSite = await requestJson('/api/admin/audit/does-not-exist', {
+    method: 'DELETE', headers: { Cookie: cookie, Origin: 'https://evil.example' },
+  });
+  assert.equal(crossSite.response.status, 403);
+
+  const sameSite = await requestJson('/api/admin/audit/does-not-exist', {
+    method: 'DELETE', headers: { Cookie: cookie, Origin: apiOrigin },
+  });
+  assert.equal(sameSite.response.status, 404);
+});
+
+test('CORS headers are only sent to allow-listed origins', async () => {
+  const { response } = await requestJson('/api/crm/settings', { headers: { Origin: 'https://evil.example' } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
+});
+
+test('admin login sets an HttpOnly SameSite session cookie and logout clears it', async () => {
+  const login = await requestJson('/api/admin/login', {
+    method: 'POST', body: { email: 'sa@example.test', password: 'not-used' },
+  });
+  assert.equal(login.response.status, 200, JSON.stringify(login.data));
+  const setCookie = login.response.headers.get('set-cookie') || '';
+  assert.match(setCookie, /cdx_admin_session=[a-f0-9]{64}/);
+  assert.match(setCookie, /HttpOnly/i);
+  assert.match(setCookie, /SameSite=Strict/i);
+  const cookie = setCookie.split(';')[0];
+
+  const logout = await requestJson('/api/admin/logout', { method: 'POST', headers: { Cookie: cookie } });
+  assert.equal(logout.response.status, 200);
+  const afterLogout = await requestJson('/api/admin/audit', { headers: { Cookie: cookie } });
+  assert.equal(afterLogout.response.status, 401);
+});

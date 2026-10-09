@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ExternalLink, KeyRound, Mail, Copy, Check } from 'lucide-react';
-import { readPortalSession } from '../../services/portalAuth';
+import { portalAuthHeaders, readPortalSession } from '../../services/portalAuth';
 import type { PortalClient } from '../../services/portalDatabase';
 
 interface PortalAccessProps {
@@ -21,7 +21,8 @@ async function loadAccess(clientId: string) {
   if (!session?.token) throw new Error('Your session has expired. Sign in again.');
   const query = new URLSearchParams({ client_id: clientId });
   const response = await fetch(`/api/portal/access?${query}`, {
-    headers: { Authorization: `Bearer ${session.token}` },
+    headers: portalAuthHeaders(session.token),
+    credentials: 'same-origin',
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load your access details.');

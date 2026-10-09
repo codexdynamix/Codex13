@@ -48,3 +48,9 @@ Codex Dynamics is an agency website with a CRM and a client portal, backed by PH
 - Client/lead creation and identity edits reject duplicate email addresses or phone numbers across leads and portal accounts; phone comparisons ignore punctuation and spacing. Do not silently delete or merge any legacy duplicates.
 - Other frontend admin features still reference API paths that the PHP router does not implement, including advanced lead bulk/comment/bin actions; notification administration, client workspaces, signup/reset-request queues, settings, appointments, and parts of messaging. Those screens may still use local mock data or fail and need a separate route-coverage pass.
 - Some CRM project editing and site configuration still use browser storage; that state is browser-specific and does not sync across devices. Verify each screen's API before treating it as database-backed.
+## Security & data
+
+- The SQLite database (`artifacts/codex-dynamics/data/`) is runtime data and is git-ignored. Back it up before deploying; never commit it.
+- Fresh database: create the first Super Admin with `ADMIN_PASSWORD='<12+ chars>' npm run create-admin -- owner@example.com "Owner Name"`.
+- Sessions use HttpOnly `SameSite=Strict` cookies (`cdx_admin_session`, `cdx_portal_session`, path `/api`). Browser storage only keeps a `cookie-session` marker. Bearer tokens are still accepted for API clients.
+- Cross-origin access is off by default. Set `CORS_ALLOWED_ORIGINS` (comma-separated) to allow specific origins. Cookie-authenticated writes from other origins are rejected.

@@ -16,11 +16,37 @@ function jsonResponse(mixed $data, int $status = 200): void {
     }
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Chat-Token');
+    sendCorsHeaders();
     echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/** Origins allowed to call the API cross-origin, from CORS_ALLOWED_ORIGINS (comma-separated). */
+function corsAllowedOrigins(): array {
+    $configured = (string)(getenv('CORS_ALLOWED_ORIGINS') ?: '');
+    return array_values(array_filter(array_map(static fn($origin) => rtrim(trim($origin), '/'), explode(',', $configured))));
+}
+
+function requestOriginIsTrusted(): bool {
+    $origin = rtrim((string)($_SERVER['HTTP_ORIGIN'] ?? ''), '/');
+    if ($origin === '') return true;
+    $host = (string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? '');
+    $originHost = (string)parse_url($origin, PHP_URL_HOST) . (parse_url($origin, PHP_URL_PORT) ? ':' . parse_url($origin, PHP_URL_PORT) : '');
+    if ($host !== '' && strcasecmp($originHost, $host) === 0) return true;
+    return in_array($origin, corsAllowedOrigins(), true);
+}
+
+function sendCorsHeaders(): void {
+    static $sent = false;
+    if ($sent || headers_sent()) return;
+    $sent = true;
+    header('Vary: Origin');
+    $origin = rtrim((string)($_SERVER['HTTP_ORIGIN'] ?? ''), '/');
+    if ($origin === '' || !in_array($origin, corsAllowedOrigins(), true)) return;
+    header('Access-Control-Allow-Origin: ' . $origin);
+    header('Access-Control-Allow-Credentials: true');
+    header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Chat-Token');
 }
 
 function mapClientApiResponse(mixed $value): mixed {
@@ -49,7 +75,7 @@ function mapClientApiResponse(mixed $value): mixed {
     return $mapped;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
     jsonResponse(['ok' => true]);
 }
 
